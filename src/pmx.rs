@@ -1,17 +1,19 @@
 use nom::{le_f32, le_u8, le_i32, rest};
 use nom::IResult::*;
 use byteorder::{ByteOrder, LittleEndian};
+use encoding::{Encoding, DecoderTrap};
+use encoding::all::{UTF_8, UTF_16LE};
 
 #[derive(Debug)]
-pub struct Pmx<'a> {
-    header: Header<'a>,
+pub struct Pmx {
+    header: Header,
     //vertices: Vec<Vertex>,
 }
 
 #[derive(Debug, PartialEq)]
-struct Header<'a> {
+struct Header {
     version: f32,
-    globals: &'a [u8], // usually &[u8; 8]
+    globals: Globals, //&'a [u8],
     model_name: String,
     model_name_en: String,
     comments: String,
@@ -28,6 +30,21 @@ struct Globals {
     bone_index_size: u8,
     morph_index_size: u8,
     rigidbody_index_size: u8,
+}
+
+impl Globals {
+    fn from_slice(input: &[u8]) -> Globals {
+        Globals {
+            encoding: input[0],
+            additional: input[1],
+            vertex_index_size: input[2],
+            texture_index_size: input[3],
+            material_index_size: input[4],
+            bone_index_size: input[5],
+            morph_index_size: input[6],
+            rigidbody_index_size: input[7],
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -49,36 +66,27 @@ struct Vertex {
     edge_scale: f32,
 }
 
-fn decode_string(x: &[u8], encode: u8) -> String {
-    match encode {
-        0u8 => bytes_to_u16v(x),
+fn decode_text(x: &[u8], encoding: u8) -> String {
+    match encoding {
+        0u8 => UTF_16LE.decode(x, DecoderTrap::Strict).unwrap(),
         1u8 => String::from_utf8(x.to_vec()).unwrap(),
         _ => "Unknown encoding".to_string(),
     }
 }
 
-fn bytes_to_u16v(input: &[u8]) -> String {
-    let mut u16_vec = Vec::new();
-    let iter = input.chunks(2);
-    for x in iter {
-        u16_vec.push(LittleEndian::read_u16(x));
-    }
-    return String::from_utf16(&u16_vec).unwrap();
-}
-
 named!(parse_header<&[u8], Header>, do_parse!(
     tag!("PMX ") >>
     version: le_f32 >>
-    globals: length_bytes!(le_u8) >>
-    text: count!(length_value!(le_i32, rest), 4) >>
+    globals: map!(length_bytes!(le_u8), Globals::from_slice) >>
+    text: count!(map!(length_value!(le_i32, rest), |x| decode_text(x, globals.encoding)), 4) >>
 
     (Header {
         version: version,
         globals: globals,
-        model_name: decode_string(text[0], globals[0]),
-        model_name_en: decode_string(text[1], globals[0]),
-        comments: decode_string(text[2], globals[0]),
-        comments_en: decode_string(text[3], globals[0]),
+        model_name: text[0].clone(),
+        model_name_en: text[1].clone(),
+        comments: text[2].clone(),
+        comments_en: text[3].clone(),
     })
 ));
 
@@ -110,7 +118,7 @@ fn mytest() {
                    //Done(&b""[..],
                    Header {
                        version: 2.0,
-                       globals: &[0x00u8, 0x00u8, 0x02u8, 0x01u8, 0x01u8, 0x02u8, 0x02u8, 0x02u8],
+                       globals: Globals::from_slice(&[0x00u8, 0x00u8, 0x02u8, 0x01u8, 0x01u8, 0x02u8, 0x02u8, 0x02u8]),
                        model_name: String::from("江風"),
                        model_name_en: String::from("Model Name"),
                        comments: String::from("江風\r\n\r\nモデル制作：cham"),

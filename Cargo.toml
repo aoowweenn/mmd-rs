@@ -6,4 +6,5 @@ authors = ["aoowweenn <aoowweenn@gmail.com>"]
 
 [dependencies]
 nom = "^2.1"
-byteorder = "1"
+byteorder = "^1"
+encoding = "^0.2"

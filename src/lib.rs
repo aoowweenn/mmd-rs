@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate nom;
-
 extern crate byteorder;
+extern crate encoding;
 
 pub mod pmd;
 pub mod pmx;
