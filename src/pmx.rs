@@ -1,4 +1,7 @@
+// reference: https://gist.github.com/ulrikdamm/8274171
+// reference: https://gist.github.com/felixjones/f8a06bd48f9da9a4539f
 use nom::{le_f32, le_u8, le_i32, rest};
+use nom::IResult;
 use nom::IResult::*;
 use byteorder::{ByteOrder, LittleEndian};
 use encoding::{Encoding, DecoderTrap};
@@ -6,8 +9,8 @@ use encoding::all::{UTF_8, UTF_16LE};
 
 #[derive(Debug)]
 pub struct Pmx {
-    header: Header,
-    //vertices: Vec<Vertex>,
+    header: Header, 
+    vertices: Vec<Vertex>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -48,7 +51,7 @@ impl Globals {
 }
 
 #[derive(Debug)]
-enum Weight_deform {
+enum WeightDeform {
     BDEF1(i32),
     BDEF2(i32),
     BDEF4(i32),
@@ -62,7 +65,7 @@ struct Vertex {
     normal: [f32; 3],
     uv: [f32; 2],
     additional: Vec<[f32; 4]>,
-    weight_deform: Weight_deform,
+    weight_deform: WeightDeform,
     edge_scale: f32,
 }
 
@@ -90,14 +93,35 @@ named!(parse_header<&[u8], Header>, do_parse!(
     })
 ));
 
-named!(parse_pmx<&[u8], Pmx>, do_parse!(
+fn parse_additional(input: &[u8]) -> IResult<&[u8], [f32; 4]> {
+        count_fixed!(input, f32, le_f32, 4)
+}
+
+fn parse_vertex(input: &[u8], n: usize) -> IResult<&[u8], Vertex> {
+    do_parse!(input,
+        pos: count_fixed!(f32, le_f32, 3) >>
+        normal: count_fixed!(f32, le_f32, 3) >>
+        uv: count_fixed!(f32, le_f32, 2) >>
+        additional: count!(parse_additional, n) >>
+
+        (Vertex {
+            pos: pos,
+            normal: normal,
+            uv: uv,
+            additional: Vec::new(),
+            weight_deform: WeightDeform::BDEF1(1),
+            edge_scale: 0.0,
+        })
+    )
+}
+
+named!(pub parse_pmx<&[u8], Pmx>, do_parse!(
     header: parse_header >>
-    //vertices: length_count!(le_i32, parse_vertex) >>
-    rest >>
+    vertices: length_count!(le_i32, apply!(parse_vertex, header.globals.additional as usize)) >>
 
     (Pmx {
         header: header,
-        //vertices: vertices,
+        vertices: vertices,
     })
 ));
 
@@ -118,7 +142,8 @@ fn mytest() {
                    //Done(&b""[..],
                    Header {
                        version: 2.0,
-                       globals: Globals::from_slice(&[0x00u8, 0x00u8, 0x02u8, 0x01u8, 0x01u8, 0x02u8, 0x02u8, 0x02u8]),
+                       globals: Globals::from_slice(&[0x00u8, 0x00u8, 0x02u8, 0x01u8, 0x01u8,
+                                                      0x02u8, 0x02u8, 0x02u8]),
                        model_name: String::from("江風"),
                        model_name_en: String::from("Model Name"),
                        comments: String::from("江風\r\n\r\nモデル制作：cham"),
