@@ -1,6 +1,6 @@
 // reference: https://gist.github.com/ulrikdamm/8274171
 // reference: https://gist.github.com/felixjones/f8a06bd48f9da9a4539f
-use nom::{le_f32, le_u8, le_i32, rest};
+use nom::{le_f32, le_u8, le_i8, le_i16, le_i32, rest};
 use nom::IResult;
 use nom::IResult::*;
 use byteorder::{ByteOrder, LittleEndian};
@@ -51,12 +51,18 @@ impl Globals {
 }
 
 #[derive(Debug)]
-enum WeightDeform {
-    BDEF1(i32),
-    BDEF2(i32),
-    BDEF4(i32),
-    SDEF(i32),
-    QDEF(i32),
+struct BoneIndexWeight<T> {
+    index: T,
+    weight: f32,
+}
+
+#[derive(Debug)]
+enum WeightDeform<T> {
+    BDEF1 { bones: [BoneIndexWeight<T>; 1] },
+    BDEF2 { bones: [BoneIndexWeight<T>; 2] },
+    BDEF4 { bones: [BoneIndexWeight<T>; 4] },
+    SDEF  { bones: [BoneIndexWeight<T>; 2], C: [f32; 3], R0: [f32; 3], R1: [f32; 3] },
+    QDEF  { bones: [BoneIndexWeight<T>; 4] },
 }
 
 #[derive(Debug)]
@@ -94,22 +100,59 @@ named!(parse_header<&[u8], Header>, do_parse!(
 ));
 
 fn parse_additional(input: &[u8]) -> IResult<&[u8], [f32; 4]> {
-        count_fixed!(input, f32, le_f32, 4)
+    count_fixed!(input, f32, le_f32, 4)
 }
 
-fn parse_vertex(input: &[u8], n: usize) -> IResult<&[u8], Vertex> {
+fn parse_weight(input: &[u8], bone_idx_size: usize, weightDeformType: u8) -> IResult<&[u8], WeightDeform> {
+    let n = match weightDeformType {
+        0 => 1,
+        1 => 2,
+        2 => 4,
+        3 => 2,
+        4 => 4,
+    };
+    let getBones = match bone_idx_size {
+        1 => count_fixed!(input, i8, le_i8, n),
+        2 => count_fixed!(input, i16, le_i16, n),
+        4 => count_fixed!(input, i32, le_i32, n),
+        _ => unreachable!(), // don't know how to return error
+    };
+    do_parse!(input,
+       bones: getBones >>
+       /*
+       if weightDeformType == 3 {
+           c_r0_r1: count!(count_fixed(input, f32,le_f32, 3), 3) >>
+       }
+       */
+
+       (WeightDeform::BDEF1 {
+           bones: bones,
+           /*
+           if weightDeformType == 3 {
+               C: c_r0_r1[0],
+               R0: c_r0_r1[1],
+               R1: c_r0_r1[2]
+           }
+           */
+       })
+    )
+}
+
+fn parse_vertex(input: &[u8], additional_n: usize, bone_idx_size: usize) -> IResult<&[u8], Vertex> {
     do_parse!(input,
         pos: count_fixed!(f32, le_f32, 3) >>
         normal: count_fixed!(f32, le_f32, 3) >>
         uv: count_fixed!(f32, le_f32, 2) >>
-        additional: count!(parse_additional, n) >>
+        additional: count!(parse_additional, additional_n) >>
+        weight_deform_type: take!(1) >>
+        weight_deform: apply!(parse_weight, bone_idx_size, weight_deform_type) >>
 
         (Vertex {
             pos: pos,
             normal: normal,
             uv: uv,
-            additional: Vec::new(),
-            weight_deform: WeightDeform::BDEF1(1),
+            additional: additional,
+            weight_deform: weight_deform,
             edge_scale: 0.0,
         })
     )
@@ -117,7 +160,8 @@ fn parse_vertex(input: &[u8], n: usize) -> IResult<&[u8], Vertex> {
 
 named!(pub parse_pmx<&[u8], Pmx>, do_parse!(
     header: parse_header >>
-    vertices: length_count!(le_i32, apply!(parse_vertex, header.globals.additional as usize)) >>
+    vertices: length_count!(le_i32, apply!(
+        parse_vertex, header.globals.additional as usize, header.globals.bone_index_size)) >>
 
     (Pmx {
         header: header,
@@ -136,8 +180,8 @@ fn mytest() {
     let r = parse_header(&head_pattern);
     */
     let head_pattern = include_bytes!("../asset/江風ver1.05.pmx");
-    let r = parse_pmx(head_pattern); //parse_header(head_pattern);
-    if let Done(_, pmx) = r {
+    let r = Box::new(parse_pmx(head_pattern)); //parse_header(head_pattern);
+    if let Done(_, pmx) = *r {
         assert_eq!(pmx.header,
                    //Done(&b""[..],
                    Header {
