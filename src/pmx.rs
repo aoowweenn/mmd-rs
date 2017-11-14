@@ -4,12 +4,10 @@
 // https://github.com/benikabocha/saba
 use nom::{le_f32, le_i16, le_i32, le_i8, le_u8};
 use nom::IResult;
-use byteorder::{LittleEndian, ReadBytesExt};
 use encoding::{DecoderTrap, Encoding};
 use encoding::all::UTF_16LE;
 use types::{PmxString, Vec2, Vec3, Vec4};
 use traits::Parse;
-use std::ops::Deref;
 
 #[derive(Debug)]
 pub struct Pmx {
@@ -216,6 +214,7 @@ named!(pub parse_pmx<&[u8], Pmx>, do_parse!(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use byteorder::{LittleEndian, WriteBytesExt};
 
     fn get_test_bytes() -> Vec<u8> {
         use std::io::prelude::*;
@@ -225,7 +224,7 @@ mod tests {
         let f = File::open("asset/江風ver1.05.pmx").unwrap();
         let mut buf_reader = BufReader::new(f);
         let mut contents = Vec::new();
-        buf_reader.read_to_end(&mut contents);
+        buf_reader.read_to_end(&mut contents).unwrap();
         contents
     }
 
@@ -244,17 +243,10 @@ mod tests {
 
     #[test]
     fn test_header() {
-        use encoding::EncoderTrap;
-        let mut head_pattern = vec![
-            0x50u8,
-            0x4Du8,
-            0x58u8,
-            0x20u8, // b"PMX "
-            0x00u8,
-            0x00u8,
-            0x00u8,
-            0x40u8, // 2.0f32 8u8
-            0x08u8,
+        let magic = String::from("PMX ");
+        let version = 2.0f32;
+        let num_globals = 8u8;
+        let globals = [
             0x00u8,
             0x00u8,
             0x02u8,
@@ -264,23 +256,20 @@ mod tests {
             0x02u8,
             0x02u8,
         ];
+
+        let mut head_pattern = magic.into_bytes();
+        head_pattern.write_f32::<LittleEndian>(version).unwrap();
+        head_pattern.push(num_globals);
+        head_pattern.extend_from_slice(&globals);
+
         let model_name = PmxString::from("モデル名前");
         let model_name_en = PmxString::from("Model Name");
         let comment = PmxString::from("コメント");
         let comment_en = PmxString::from("Comment");
 
         let h = Header {
-            version: 2.0,
-            globals: Globals::from(&[
-                0x00u8,
-                0x00u8,
-                0x02u8,
-                0x01u8,
-                0x01u8,
-                0x02u8,
-                0x02u8,
-                0x02u8,
-            ]),
+            version,
+            globals: Globals::from(&globals),
             model_name: (*model_name).to_owned(),
             model_name_en: (*model_name_en).to_owned(),
             comment: (*comment).to_owned(),
@@ -298,46 +287,31 @@ mod tests {
 
     #[test]
     fn test_vertex() {
-        use std::mem;
         let pos = Vec3::unit_z();
         let normal = Vec3::unit_y();
         let uv = Vec2::unit_x();
         let additional = vec![Vec4::unit_w()];
-        let weight_deform = WeightDeform::BDEF1 {
-            bones: [
-                BoneIndexWeight::<i32> {
-                    index: 99,
-                    weight: 1.0,
-                },
-            ],
-        };
+        let bones = [
+            BoneIndexWeight::<i32> {
+                index: 99,
+                weight: 1.0,
+            },
+        ];
+        let weight_deform = WeightDeform::BDEF1 { bones };
         let edge_scale = 9.9f32;
 
-        let data_f = unsafe {
-            [
-                pos.x,
-                pos.y,
-                pos.z,
-                normal.x,
-                normal.y,
-                normal.z,
-                uv.x,
-                uv.y,
-                additional[0].x,
-                additional[0].y,
-                additional[0].z,
-                additional[0].w,
-                mem::transmute(99i32 << 8),
-                mem::transmute((99i32 >> 24) + mem::transmute::<f32, i32>(edge_scale) << 8),
-                {
-                    let x = mem::transmute::<f32, u32>(edge_scale);
-                    mem::transmute(x >> 24)
-                },
-            ]
-        };
-        let data: [u8; 60] = unsafe { mem::transmute(data_f) };
+        let mut data = vec![];
+        [&pos[..], &normal[..], &uv[..], &additional[0][..]]
+            .concat()
+            .into_iter()
+            .for_each(|x| data.write_f32::<LittleEndian>(x).unwrap());
+        data.push(0u8);
+        data.write_i32::<LittleEndian>(bones[0].index).unwrap();
+        data.write_f32::<LittleEndian>(edge_scale).unwrap();
 
-        let (_, vertex) = Vertex::parse(&data, 1, 4).unwrap();
+        let additional_n = 1;
+        let bone_idx_size = 4;
+        let (_, vertex) = Vertex::parse(&data, additional_n, bone_idx_size).unwrap();
         debug_assert_eq!(
             vertex,
             Vertex {

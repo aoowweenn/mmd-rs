@@ -13,7 +13,6 @@ mod traits;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn parse_pmx() {}

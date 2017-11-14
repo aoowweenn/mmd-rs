@@ -1,5 +1,3 @@
-use std::mem::transmute;
-
 use nom::{IResult, le_f32};
 use types::{Vec2, Vec3, Vec4};
 
