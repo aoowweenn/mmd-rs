@@ -3,11 +3,14 @@ use std::mem::transmute;
 use nom::{IResult, le_f32};
 use types::{Vec2, Vec3, Vec4};
 
-pub trait Parse<VEC=Self> {
+pub trait Parse<VEC = Self> {
     const COUNT: usize;
     type ARRAY;
-    
-    fn parse(input: &[u8]) -> IResult<&[u8], VEC> where VEC: From<Self::ARRAY> {
+
+    fn parse(input: &[u8]) -> IResult<&[u8], VEC>
+    where
+        VEC: From<Self::ARRAY>,
+    {
         Self::nom_macro(input).map(|o| VEC::from(o))
     }
 
@@ -49,7 +52,7 @@ fn test_vec() {
     let v2 = [arr[0], arr[1]];
     let v3 = [arr[0], arr[1], arr[2]];
     let v4 = arr;
-    let raw: [u8; 16] = unsafe {transmute(arr)};
+    let raw: [u8; 16] = unsafe { transmute(arr) };
     macro_rules! test {
         ( $( ($ty:ty, $id:ident, $n:expr) ),* ) => {{
             $(

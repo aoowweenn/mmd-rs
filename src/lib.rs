@@ -1,8 +1,8 @@
+extern crate byteorder;
+extern crate cgmath;
+extern crate encoding;
 #[macro_use]
 extern crate nom;
-extern crate byteorder;
-extern crate encoding;
-extern crate cgmath;
 
 pub mod pmd;
 pub mod pmx;
@@ -16,6 +16,5 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_pmx() {
-    }
+    fn parse_pmx() {}
 }

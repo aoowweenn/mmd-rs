@@ -7,16 +7,15 @@ use nom::IResult;
 use byteorder::{LittleEndian, ReadBytesExt};
 use encoding::{DecoderTrap, Encoding};
 use encoding::all::UTF_16LE;
-use types::{Vec2, Vec3, Vec4};
+use types::{PmxString, Vec2, Vec3, Vec4};
 use traits::Parse;
+use std::ops::Deref;
 
-/*
 #[derive(Debug)]
 pub struct Pmx {
-    header: Header, 
+    header: Header,
     vertices: Vec<Vertex>,
 }
-*/
 
 #[derive(Debug, PartialEq)]
 struct Header {
@@ -204,18 +203,15 @@ fn decode_text(x: &[u8], encoding: u8) -> String {
 
 named_args!(length_string(encode: u8)<String>, map!(length_data!(le_i32), |x| decode_text(x, encode)));
 
-/*
 named!(pub parse_pmx<&[u8], Pmx>, do_parse!(
-    header: parse_header >>
-    vertices: length_count!(le_i32, apply!(
-        parse_vertex, header.globals.additional as usize, header.globals.bone_index_size)) >>
+    header: call!(Header::parse) >>
+    vertices: length_count!(le_i32, apply!(Vertex::parse, header.globals.additional as usize, header.globals.bone_index_size as usize)) >>
 
     (Pmx {
         header: header,
         vertices: vertices,
     })
 ));
-*/
 
 #[cfg(test)]
 mod tests {
@@ -268,59 +264,36 @@ mod tests {
             0x02u8,
             0x02u8,
         ];
-        let model_name = String::from("モデル名前");
-        let model_name_en = String::from("Model Name");
-        let comment = String::from("コメント");
-        let comment_en = String::from("Comment");
+        let model_name = PmxString::from("モデル名前");
+        let model_name_en = PmxString::from("Model Name");
+        let comment = PmxString::from("コメント");
+        let comment_en = PmxString::from("Comment");
 
-        let model_name_utf16 = UTF_16LE.encode(&model_name, EncoderTrap::Strict).unwrap();
-        let model_name_en_utf16 = UTF_16LE
-            .encode(&model_name_en, EncoderTrap::Strict)
-            .unwrap();
-        let comment_utf16 = UTF_16LE.encode(&comment, EncoderTrap::Strict).unwrap();
-        let comment_en_utf16 = UTF_16LE.encode(&comment_en, EncoderTrap::Strict).unwrap();
-        head_pattern.push(model_name_utf16.len() as u8);
-        head_pattern.push(0u8);
-        head_pattern.push(0u8);
-        head_pattern.push(0u8);
-        head_pattern.extend_from_slice(&model_name_utf16);
-        head_pattern.push(model_name_en_utf16.len() as u8);
-        head_pattern.push(0u8);
-        head_pattern.push(0u8);
-        head_pattern.push(0u8);
-        head_pattern.extend_from_slice(&model_name_en_utf16);
-        head_pattern.push(comment_utf16.len() as u8);
-        head_pattern.push(0u8);
-        head_pattern.push(0u8);
-        head_pattern.push(0u8);
-        head_pattern.extend_from_slice(&comment_utf16);
-        head_pattern.push(comment_en_utf16.len() as u8);
-        head_pattern.push(0u8);
-        head_pattern.push(0u8);
-        head_pattern.push(0u8);
-        head_pattern.extend_from_slice(&comment_en_utf16);
+        let h = Header {
+            version: 2.0,
+            globals: Globals::from(&[
+                0x00u8,
+                0x00u8,
+                0x02u8,
+                0x01u8,
+                0x01u8,
+                0x02u8,
+                0x02u8,
+                0x02u8,
+            ]),
+            model_name: (*model_name).to_owned(),
+            model_name_en: (*model_name_en).to_owned(),
+            comment: (*comment).to_owned(),
+            comment_en: (*comment_en).to_owned(),
+        };
+
+        head_pattern.append(&mut model_name.into());
+        head_pattern.append(&mut model_name_en.into());
+        head_pattern.append(&mut comment.into());
+        head_pattern.append(&mut comment_en.into());
         let (_, header) = Header::parse(&head_pattern).unwrap();
 
-        assert_eq!(
-            header,
-            Header {
-                version: 2.0,
-                globals: Globals::from(&[
-                    0x00u8,
-                    0x00u8,
-                    0x02u8,
-                    0x01u8,
-                    0x01u8,
-                    0x02u8,
-                    0x02u8,
-                    0x02u8
-                ]),
-                model_name,
-                model_name_en,
-                comment,
-                comment_en,
-            }
-        );
+        assert_eq!(header, h);
     }
 
     #[test]
