@@ -6,7 +6,7 @@ use nom::{le_f32, le_i16, le_i32, le_i8, le_u8};
 use nom::IResult;
 use encoding::{DecoderTrap, Encoding};
 use encoding::all::UTF_16LE;
-use types::{PmxString, Vec2, Vec3, Vec4};
+use types::{DataBlock, PmxString, Vec2, Vec3, Vec4};
 use traits::Parse;
 
 #[derive(Debug)]
@@ -214,7 +214,6 @@ named!(pub parse_pmx<&[u8], Pmx>, do_parse!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use byteorder::{LittleEndian, WriteBytesExt};
 
     fn get_test_bytes() -> Vec<u8> {
         use std::io::prelude::*;
@@ -257,11 +256,6 @@ mod tests {
             0x02u8,
         ];
 
-        let mut head_pattern = magic.into_bytes();
-        head_pattern.write_f32::<LittleEndian>(version).unwrap();
-        head_pattern.push(num_globals);
-        head_pattern.extend_from_slice(&globals);
-
         let model_name = PmxString::from("モデル名前");
         let model_name_en = PmxString::from("Model Name");
         let comment = PmxString::from("コメント");
@@ -276,11 +270,9 @@ mod tests {
             comment_en: (*comment_en).to_owned(),
         };
 
-        head_pattern.append(&mut model_name.into());
-        head_pattern.append(&mut model_name_en.into());
-        head_pattern.append(&mut comment.into());
-        head_pattern.append(&mut comment_en.into());
-        let (_, header) = Header::parse(&head_pattern).unwrap();
+        let data = DataBlock::new() << magic.as_bytes() << version << num_globals << &globals[..] << model_name << model_name_en << comment << comment_en;
+
+        let (_, header) = Header::parse(&data.unwrap()).unwrap();
 
         assert_eq!(header, h);
     }
@@ -300,18 +292,11 @@ mod tests {
         let weight_deform = WeightDeform::BDEF1 { bones };
         let edge_scale = 9.9f32;
 
-        let mut data = vec![];
-        [&pos[..], &normal[..], &uv[..], &additional[0][..]]
-            .concat()
-            .into_iter()
-            .for_each(|x| data.write_f32::<LittleEndian>(x).unwrap());
-        data.push(0u8);
-        data.write_i32::<LittleEndian>(bones[0].index).unwrap();
-        data.write_f32::<LittleEndian>(edge_scale).unwrap();
+        let data = DataBlock::new() << &pos[..] << &normal[..] << &uv[..] << &additional[0][..] << 0u8 << bones[0].index << edge_scale;
 
         let additional_n = 1;
         let bone_idx_size = 4;
-        let (_, vertex) = Vertex::parse(&data, additional_n, bone_idx_size).unwrap();
+        let (_, vertex) = Vertex::parse(&data.unwrap(), additional_n, bone_idx_size).unwrap();
         debug_assert_eq!(
             vertex,
             Vertex {
