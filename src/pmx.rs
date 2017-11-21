@@ -2,27 +2,64 @@
 // https://gist.github.com/ulrikdamm/8274171
 // https://gist.github.com/felixjones/f8a06bd48f9da9a4539f
 // https://github.com/benikabocha/saba
-use nom::{le_f32, le_i16, le_i32, le_i8, le_u8};
+use nom::{le_f32, le_i16, le_i32, le_i8, le_u16, le_u32, le_u8};
 use nom::IResult;
-use encoding::{DecoderTrap, Encoding};
-use encoding::all::UTF_16LE;
-use types::{DataBlock, PmxString, Vec2, Vec3, Vec4};
+use types::{PmxString, Vec2, Vec3, Vec4};
 use traits::Parse;
+
+/// For vertex index type
+fn le_unsigned(input: &[u8], size: usize) -> IResult<&[u8], i32> {
+    match size {
+        1 => le_u8(input).map(i32::from),
+        2 => le_u16(input).map(i32::from),
+        4 => le_i32(input),
+        _ => unreachable!(),
+    }
+}
+
+/// For other index types (Bone, Texture, Material, Morph, Rigibody)
+fn le_integer(input: &[u8], size: usize) -> IResult<&[u8], i32> {
+    match size {
+        1 => le_i8(input).map(i32::from),
+        2 => le_i16(input).map(i32::from),
+        4 => le_i32(input),
+        _ => unreachable!(),
+    }
+}
 
 #[derive(Debug)]
 pub struct Pmx {
     header: Header,
     vertices: Vec<Vertex>,
+    faces: Vec<Face>,
+    textures: Vec<Texture>,
+}
+
+impl Pmx {
+    named!(pub parse<&[u8], Pmx>, do_parse!(
+        header: call!(Header::parse) >>
+        vertices: length_count!(le_i32, apply!(Vertex::parse, header.globals.additional as usize, header.globals.bone_index_size as usize)) >>
+        num_face_mul_3: le_i32 >>
+        faces: count!(apply!(Face::parse, header.globals.vertex_index_size as usize), num_face_mul_3 as usize / 3) >>
+        textures: length_count!(le_u32, apply!(Texture::parse, header.globals.encoding)) >>
+
+        (Pmx {
+            header,
+            vertices,
+            faces,
+            textures,
+        })
+    ));
 }
 
 #[derive(Debug, PartialEq)]
 struct Header {
     version: f32,
     globals: Globals,
-    model_name: String,
-    model_name_en: String,
-    comment: String,
-    comment_en: String,
+    model_name: PmxString,
+    model_name_en: PmxString,
+    comment: PmxString,
+    comment_en: PmxString,
 }
 
 impl Header {
@@ -30,7 +67,7 @@ impl Header {
         tag!("PMX ") >>
         version: le_f32 >>
         globals: map!(length_bytes!(le_u8), Globals::from) >>
-        text: count!(call!(length_string,globals.encoding), 4) >>
+        text: count!(call!(PmxString::parse, globals.encoding), 4) >>
 
         ({
             let mut text = text;
@@ -62,7 +99,7 @@ struct Globals {
     rigidbody_index_size: u8,
 }
 
-impl Globals {
+impl<'a> From<&'a [u8]> for Globals {
     fn from(input: &[u8]) -> Globals {
         Globals {
             encoding: input[0],
@@ -77,82 +114,68 @@ impl Globals {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-struct BoneIndexWeight<T> {
-    index: T,
-    weight: f32,
+#[allow(dead_code)]
+#[repr(u8)]
+enum BoneWeightType {
+    BDEF1 = 0,
+    BDEF2 = 1,
+    BDEF4 = 2,
+    SDEF = 3,
+    QDEF = 4,
 }
 
-impl BoneIndexWeight<i32> {
-    fn parse(input: &[u8], index_num_bytes: usize, need_weight: bool) -> IResult<&[u8], Self> {
-        let index_res = {
-            match index_num_bytes {
-                1 => le_i8(input).map(|o| o as i32),
-                2 => le_i16(input).map(|o| o as i32),
-                4 => le_i32(input),
-                _ => unreachable!(),
-            }
-        };
-
-        if !need_weight {
-            return index_res.map(|o| {
-                Self {
-                    index: o,
-                    weight: 1.0f32,
-                }
-            });
-        }
-
-        let (_, index) = index_res.unwrap();
-
-        let weight_raw = &input[index_num_bytes..];
-
-        le_f32(weight_raw).map(|weight| Self { index, weight })
-    }
-}
-
+/// when index = -1, we neglect the bone.
 #[derive(Debug, PartialEq)]
-enum WeightDeform<T> {
-    BDEF1 { bones: [BoneIndexWeight<T>; 1] },
-    BDEF2 { bones: [BoneIndexWeight<T>; 2] },
-    BDEF4 { bones: [BoneIndexWeight<T>; 4] },
+enum BoneWeight {
+    BDEF1 { index: i32 },
+    BDEF2 { indices: [i32; 2], weight: f32 },
+    BDEF4 {
+        indices: [i32; 4],
+        weights: [f32; 4],
+    },
     SDEF {
-        bones: [BoneIndexWeight<T>; 2],
+        indices: [i32; 2],
+        weight: f32,
         c: Vec3,
         r0: Vec3,
         r1: Vec3,
     },
-    QDEF { bones: [BoneIndexWeight<T>; 4] },
+    QDEF {
+        indices: [i32; 4],
+        weights: [f32; 4],
+    },
 }
 
-impl WeightDeform<i32> {
+impl BoneWeight {
     /// TODO: wait for const generics(RFC 2000) to revise
-    fn parse(input: &[u8], bone_idx_size: usize, weight_deform_type: u8) -> IResult<&[u8], Self> {
-        match weight_deform_type {
-            0 => do_parse!(input,
-                    bones: count_fixed!(BoneIndexWeight<i32>, call!(BoneIndexWeight::<i32>::parse, bone_idx_size, false), 1) >>
-                    (WeightDeform::BDEF1 { bones })
+    fn parse(input: &[u8], bone_idx_size: usize, bone_weight_type_u8: u8) -> IResult<&[u8], Self> {
+        let bone_weight_type = unsafe { ::std::mem::transmute(bone_weight_type_u8) };
+
+        match bone_weight_type {
+            BoneWeightType::BDEF1 => le_integer(input, bone_idx_size).map(|index| BoneWeight::BDEF1 { index }),
+            BoneWeightType::BDEF2 => do_parse!(input,
+                    indices: count_fixed!(i32, apply!(le_integer, bone_idx_size), 2) >>
+                    weight: le_f32 >>
+                    (BoneWeight::BDEF2 { indices, weight })
                 ),
-            1 => do_parse!(input,
-                    bones: count_fixed!(BoneIndexWeight<i32>, call!(BoneIndexWeight::<i32>::parse, bone_idx_size, true), 2) >>
-                    (WeightDeform::BDEF2 { bones })
+            BoneWeightType::BDEF4 => do_parse!(input,
+                    indices: count_fixed!(i32, apply!(le_integer, bone_idx_size), 4) >>
+                    weights: count_fixed!(f32, le_f32, 4) >>
+                    (BoneWeight::BDEF4 { indices, weights })
                 ),
-            2 => do_parse!(input,
-                    bones: count_fixed!(BoneIndexWeight<i32>, call!(BoneIndexWeight::<i32>::parse, bone_idx_size, true), 4) >>
-                    (WeightDeform::BDEF4 { bones })
-                ),
-            3 => do_parse!(input,
-                    bones: count_fixed!(BoneIndexWeight<i32>, call!(BoneIndexWeight::<i32>::parse, bone_idx_size, true), 2) >>
+            BoneWeightType::SDEF => do_parse!(input,
+                    indices: count_fixed!(i32, apply!(le_integer, bone_idx_size), 2) >>
+                    weight: le_f32 >>
                     c: call!(Vec3::parse) >>
                     r0: call!(Vec3::parse) >>
                     r1: call!(Vec3::parse) >>
-                    (WeightDeform::SDEF { bones, c, r0, r1 })
+                    (BoneWeight::SDEF { indices, weight, c, r0, r1 })
                 ),
-            4 => do_parse!(input,
-                    bones: count_fixed!(BoneIndexWeight<i32>, call!(BoneIndexWeight::<i32>::parse, bone_idx_size, true), 4) >>
-                    (WeightDeform::QDEF { bones })
+            BoneWeightType::QDEF => do_parse!(input,
+                    indices: count_fixed!(i32, apply!(le_integer, bone_idx_size), 4) >>
+                    weights: count_fixed!(f32, le_f32, 4) >>
+                    (BoneWeight::QDEF { indices, weights })
                 ),
-            _ => unreachable!(),
         }
     }
 }
@@ -164,7 +187,7 @@ struct Vertex {
     uv: Vec2,
     additional: Vec<Vec4>,
     /// We extend all index size to 4
-    weight_deform: WeightDeform<i32>,
+    bone_weight: BoneWeight,
     edge_scale: f32,
 }
 
@@ -175,45 +198,48 @@ impl Vertex {
             normal: call!(Vec3::parse) >>
             uv: call!(Vec2::parse) >>
             additional: count!(call!(Vec4::parse), additional_n) >>
-            weight_deform_type: take!(1) >>
-            weight_deform: apply!(WeightDeform::parse, bone_idx_size, weight_deform_type[0]) >>
+            bone_weight_type_u8: take!(1) >>
+            bone_weight: apply!(BoneWeight::parse, bone_idx_size, bone_weight_type_u8[0]) >>
             edge_scale: le_f32 >>
 
             (Vertex {
-                pos: pos,
-                normal: normal,
-                uv: uv,
-                additional: additional,
-                weight_deform: weight_deform,
-                edge_scale: edge_scale,
+                pos,
+                normal,
+                uv,
+                additional,
+                bone_weight,
+                edge_scale,
             })
         )
     }
 }
 
-fn decode_text(x: &[u8], encoding: u8) -> String {
-    match encoding {
-        0u8 => UTF_16LE.decode(x, DecoderTrap::Strict).unwrap(),
-        1u8 => String::from_utf8(x.to_vec()).unwrap(),
-        _ => panic!("Unknown encoding"),
+#[derive(Debug)]
+struct Face(i32, i32, i32);
+
+impl Face {
+    fn parse(input: &[u8], vertex_idx_size: usize) -> IResult<&[u8], Face> {
+        count!(input, apply!(le_unsigned, vertex_idx_size), 3).map(|o| Face(o[0], o[1], o[2]))
     }
 }
 
-named_args!(length_string(encode: u8)<String>, map!(length_data!(le_i32), |x| decode_text(x, encode)));
+#[derive(Debug)]
+struct Texture(PmxString);
 
-named!(pub parse_pmx<&[u8], Pmx>, do_parse!(
-    header: call!(Header::parse) >>
-    vertices: length_count!(le_i32, apply!(Vertex::parse, header.globals.additional as usize, header.globals.bone_index_size as usize)) >>
-
-    (Pmx {
-        header: header,
-        vertices: vertices,
-    })
-));
+impl Texture {
+    fn parse(input: &[u8], encoding: u8) -> IResult<&[u8], Texture> {
+        map!(
+            input,
+            apply!(PmxString::parse, encoding),
+            |o| { Texture(o) }
+        )
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use types::DataBlock;
 
     fn get_test_bytes() -> Vec<u8> {
         use std::io::prelude::*;
@@ -225,19 +251,6 @@ mod tests {
         let mut contents = Vec::new();
         buf_reader.read_to_end(&mut contents).unwrap();
         contents
-    }
-
-    #[test]
-    fn test_bone_index_weight() {
-        let data = [10u8, 0u8, 0u8, 0u8, 0x40u8];
-        let (_, index_weight) = BoneIndexWeight::<i32>::parse(&data, 1, true).unwrap();
-        assert_eq!(
-            index_weight,
-            BoneIndexWeight::<i32> {
-                index: 10,
-                weight: 2.0,
-            }
-        );
     }
 
     #[test]
@@ -261,16 +274,16 @@ mod tests {
         let comment = PmxString::from("コメント");
         let comment_en = PmxString::from("Comment");
 
+        let data = DataBlock::new() << magic.as_bytes() << version << num_globals << &globals[..] << &model_name << &model_name_en << &comment << &comment_en;
+
         let h = Header {
             version,
-            globals: Globals::from(&globals),
-            model_name: (*model_name).to_owned(),
-            model_name_en: (*model_name_en).to_owned(),
-            comment: (*comment).to_owned(),
-            comment_en: (*comment_en).to_owned(),
+            globals: Globals::from(&globals[..]),
+            model_name,
+            model_name_en,
+            comment,
+            comment_en,
         };
-
-        let data = DataBlock::new() << magic.as_bytes() << version << num_globals << &globals[..] << model_name << model_name_en << comment << comment_en;
 
         let (_, header) = Header::parse(&data.unwrap()).unwrap();
 
@@ -283,16 +296,13 @@ mod tests {
         let normal = Vec3::unit_y();
         let uv = Vec2::unit_x();
         let additional = vec![Vec4::unit_w()];
-        let bones = [
-            BoneIndexWeight::<i32> {
-                index: 99,
-                weight: 1.0,
-            },
-        ];
-        let weight_deform = WeightDeform::BDEF1 { bones };
+        let indices = [111, 999];
+        let weight = 0.4;
+        let bone_type = BoneWeightType::BDEF2;
+        let bone_weight = BoneWeight::BDEF2 { indices, weight };
         let edge_scale = 9.9f32;
 
-        let data = DataBlock::new() << &pos[..] << &normal[..] << &uv[..] << &additional[0][..] << 0u8 << bones[0].index << edge_scale;
+        let data = DataBlock::new() << &pos[..] << &normal[..] << &uv[..] << &additional[0][..] << (bone_type as u8) << indices[0] << indices[1] << weight << edge_scale;
 
         let additional_n = 1;
         let bone_idx_size = 4;
@@ -304,7 +314,7 @@ mod tests {
                 normal,
                 uv,
                 additional,
-                weight_deform,
+                bone_weight,
                 edge_scale,
             }
         );
