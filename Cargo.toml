@@ -5,10 +5,7 @@ description = "An implementation of PMD/PMX/VMD used in MMD (MikuMikuDance)."
 authors = ["aoowweenn <aoowweenn@gmail.com>"]
 
 [dependencies]
-byteorder = "^1"
+byteorder = "1"
 encoding = "*"
 cgmath = "*"
 
-[dependencies.nom]
-version = "^3.2"
-features = ["nightly"]
