@@ -8,4 +8,7 @@ authors = ["aoowweenn <aoowweenn@gmail.com>"]
 byteorder = "1"
 encoding = "*"
 cgmath = "*"
-
+num = "*"
+enum_primitive = "*"
+enumflags = "*"
+enumflags_derive = "*"

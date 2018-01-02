@@ -1,3 +1,6 @@
+use num::FromPrimitive;
+use enumflags::*;
+
 use std::io;
 use std::io::BufReader;
 use std::path::Path;
@@ -20,6 +23,7 @@ enum PmxError {
 pub type Vec2 = Vector2<f32>;
 pub type Vec3 = Vector3<f32>;
 pub type Vec4 = Vector4<f32>;
+pub type DrawMode = BitFlags<DrawModeFlags>;
 
 fn err_str(s: &str) -> io::Error {
     io::Error::new(
@@ -130,6 +134,7 @@ pub struct PmxFile {
     vertices: Vec<Vertex>,
     faces: Vec<Face>,
     textures: Vec<Texture>,
+    materials: Vec<Material>,
 }
 
 impl PmxFile {
@@ -154,24 +159,23 @@ impl PmxFile {
         for _ in 0..num_textures {
             textures.push(Texture::from_reader(rdr, &header.globals)?);
         }
+        
+        let num_materials = rdr.read_u32::<LE>()? as usize;
+        let mut materials = Vec::with_capacity(num_materials);
+        for _ in 0..num_materials {
+            materials.push(Material::from_reader(rdr, &header.globals)?);
+        }
 
-        Ok(PmxFile { header, vertices, faces, textures })
+        Ok(PmxFile { header, vertices, faces, textures, materials })
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StringEnc {
-    UTF16,
-    UTF8,
-}
-
-impl StringEnc {
-    fn from_reader<RBExt: ReadBytesExt>(rdr: &mut RBExt) -> Result<StringEnc, io::Error> {
-        match rdr.read_u8()? {
-            0u8 => Ok(StringEnc::UTF16),
-            1u8 => Ok(StringEnc::UTF8),
-            _ => Err(err_str("Invalid String Encoding")),
-        }
+enum_from_primitive! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(u8)]
+    enum StringEnc {
+        UTF16,
+        UTF8,
     }
 }
 
@@ -189,7 +193,7 @@ struct Globals {
 
 impl Globals {
     fn from_reader<RBExt: ReadBytesExt>(rdr: &mut RBExt) -> Result<Globals, io::Error> {
-        let encoding = StringEnc::from_reader(rdr)?;
+        let encoding = StringEnc::from_u8(rdr.read_u8()?).ok_or(err_str("Unknown String Encoding"))?;
         let additional = rdr.read_u8()?;
         let vertex_index_size = rdr.read_u8()?;
         let texture_index_size = rdr.read_u8()?;
@@ -343,6 +347,97 @@ impl Texture {
     fn from_reader<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Texture, io::Error> {
         let s = rdr.read_nstring(globals.encoding)?;
         Ok(Texture(s))
+    }
+}
+
+#[derive(EnumFlags, Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum DrawModeFlags {
+    TwoSided = 0x01,
+    GroundShadow = 0x02,
+    CastSelfShadow = 0x04,
+    RecieveSelfShadow = 0x08,
+    DrawEdge = 0x10,
+    VertexColor = 0x20,
+    DrawPoint = 0x40,
+    DrawLine = 0x80,
+}
+
+enum_from_primitive! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(u8)]
+    enum SphereMode {
+        NONE, MUL, ADD, SUB,
+    }
+}
+
+enum_from_primitive! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(u8)]
+    enum ToonMode {
+        Separate, Common,
+    }
+}
+
+#[derive(Debug)]
+struct Material {
+    name: String,
+    name_en: String,
+    diffuse: Vec4,
+    specular: Vec3,
+    intensity: f32,
+    ambient: Vec3,
+    draw_mode: DrawMode,
+    edge_color: Vec4,
+    edge_size: f32,
+    texture_id: i32,
+    sphere_texture_id: i32,
+    sphere_mode: SphereMode,
+    toon_mode: ToonMode,
+    toon_texture_id: i32,
+    memo: String,
+    num_vertex_indices: i32,
+}
+
+impl Material {
+    fn from_reader<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Material, io::Error> {
+        let name = rdr.read_nstring(globals.encoding)?;
+        let name_en = rdr.read_nstring(globals.encoding)?;
+        let diffuse = rdr.read_vec4()?;
+        let specular = rdr.read_vec3()?;
+        let intensity = rdr.read_f32::<LE>()?;
+        let ambient = rdr.read_vec3()?;
+        // TODO: check if enumflags crate has been fixed
+        //let draw_mode = BitFlags::from_bits(rdr.read_u8()?).ok_or(err_str("Invalid Draw Mode"))?;
+        let draw_mode = BitFlags::from_bits_truncate(rdr.read_u8()?);
+        let edge_color = rdr.read_vec4()?;
+        let edge_size = rdr.read_f32::<LE>()?;
+        let texture_id = rdr.read_index(globals.texture_index_size)?;
+        let sphere_texture_id = rdr.read_index(globals.texture_index_size)?;
+        let sphere_mode = SphereMode::from_u8(rdr.read_u8()?).ok_or(err_str("Invalid Sphere Mode"))?;
+        let toon_mode = ToonMode::from_u8(rdr.read_u8()?).ok_or(err_str("Invalid Toon Mode"))?;
+        let toon_texture_id = rdr.read_index(globals.texture_index_size)?;
+        let memo = rdr.read_nstring(globals.encoding)?;
+        let num_vertex_indices = rdr.read_i32::<LE>()?;
+
+        Ok(Material {
+            name,
+            name_en,
+            diffuse,
+            specular,
+            intensity,
+            ambient,
+            draw_mode,
+            edge_color,
+            edge_size,
+            texture_id,
+            sphere_texture_id,
+            sphere_mode,
+            toon_mode,
+            toon_texture_id,
+            memo,
+            num_vertex_indices,
+        })
     }
 }
 

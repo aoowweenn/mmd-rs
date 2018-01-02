@@ -1,6 +1,15 @@
 extern crate byteorder;
 extern crate cgmath;
 extern crate encoding;
+
+extern crate num;
+#[macro_use]
+extern crate enum_primitive;
+
+extern crate enumflags;
+#[macro_use]
+extern crate enumflags_derive;
+
 /*
 #[macro_use]
 extern crate nom;
