@@ -4,6 +4,7 @@ use enumflags::*;
 use std::io;
 use std::io::BufReader;
 use std::path::Path;
+use std::marker::Sized;
 
 use byteorder::{ReadBytesExt, LE};
 
@@ -24,6 +25,15 @@ pub type Vec2 = Vector2<f32>;
 pub type Vec3 = Vector3<f32>;
 pub type Vec4 = Vector4<f32>;
 pub type DrawMode = BitFlags<DrawModeFlags>;
+
+trait FromReader<T> {
+    fn from_reader<RExt: ReaderExt>(rdr: &mut RExt) -> Result<Self, io::Error> where Self: Sized {
+        Err(err_str("dummy"))
+    }
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, t: T) -> Result<Self, io::Error> where Self: Sized {
+        Err(err_str("dummy"))
+    }
+}
 
 fn err_str(s: &str) -> io::Error {
     io::Error::new(
@@ -106,7 +116,7 @@ trait ReaderExt: ReadBytesExt {
 
     /// TODO: handle String Error
     fn read_string(&mut self, n: usize) -> Result<String, io::Error> {
-        unsafe { Ok(String::from_utf8_unchecked(self.read_vec(n)?)) }
+        Ok(String::from_utf8(self.read_vec(n)?).expect("Invalid String"))
     }
 
     /// TODO: handle encoding error
@@ -138,33 +148,31 @@ pub struct PmxFile {
 }
 
 impl PmxFile {
+    fn read_structs<'a, T: FromReader<&'a Globals>, RBExt: ReadBytesExt>(rdr: &mut RBExt, n: usize, g: &'a Globals) -> Result<Vec<T>, io::Error> {
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            v.push(T::from_reader_arg(rdr, g)?);
+        }
+        Ok(v)
+    }
+}
+
+impl FromReader<()> for PmxFile {
     fn from_reader<R: io::Read>(rdr: &mut R) -> Result<PmxFile, io::Error> {
         let header = Header::from_reader(rdr)?;
 
         let num_vertices = rdr.read_u32::<LE>()? as usize;
-        let mut vertices = Vec::with_capacity(num_vertices);
-        for _ in 0..num_vertices {
-            vertices.push(Vertex::from_reader(rdr, &header.globals)?);
-        }
+        let vertices = PmxFile::read_structs(rdr, num_vertices, &header.globals)?;
 
         let num_face_indices = rdr.read_u32::<LE>()? as usize;
         let num_faces = num_face_indices / 3;
-        let mut faces = Vec::with_capacity(num_faces);
-        for _ in 0..num_faces {
-            faces.push(Face::from_reader(rdr, &header.globals)?);
-        }
+        let faces = PmxFile::read_structs(rdr, num_faces, &header.globals)?;
 
         let num_textures = rdr.read_u32::<LE>()? as usize;
-        let mut textures = Vec::with_capacity(num_textures);
-        for _ in 0..num_textures {
-            textures.push(Texture::from_reader(rdr, &header.globals)?);
-        }
+        let textures = PmxFile::read_structs(rdr, num_textures, &header.globals)?;
         
         let num_materials = rdr.read_u32::<LE>()? as usize;
-        let mut materials = Vec::with_capacity(num_materials);
-        for _ in 0..num_materials {
-            materials.push(Material::from_reader(rdr, &header.globals)?);
-        }
+        let materials= PmxFile::read_structs(rdr, num_materials, &header.globals)?;
 
         Ok(PmxFile { header, vertices, faces, textures, materials })
     }
@@ -191,7 +199,7 @@ struct Globals {
     rigidbody_index_size: u8,
 }
 
-impl Globals {
+impl FromReader<()> for Globals {
     fn from_reader<RBExt: ReadBytesExt>(rdr: &mut RBExt) -> Result<Globals, io::Error> {
         let encoding = StringEnc::from_u8(rdr.read_u8()?).ok_or(err_str("Unknown String Encoding"))?;
         let additional = rdr.read_u8()?;
@@ -216,7 +224,8 @@ impl Globals {
 
 #[derive(Debug)]
 struct Header {
-    magic_id: String,
+    //magic_id: String,
+    magic_id: [u8; 4],
     version: f32,
     num_globals: u8,
     globals: Globals,
@@ -226,10 +235,11 @@ struct Header {
     comment_en: String,
 }
 
-impl Header {
+impl FromReader<()> for Header {
     fn from_reader<RExt: ReaderExt>(rdr: &mut RExt) -> Result<Header, io::Error> {
-        let magic_id = rdr.read_string(4)?;
-        if magic_id != "PMX " {
+        //let magic_id = rdr.read_string(4)?;
+        let magic_id = [rdr.read_u8()?, rdr.read_u8()?, rdr.read_u8()?, rdr.read_u8()?];
+        if &magic_id != b"PMX " {
             return Err(err_str("Not valid PMX file"));
         }
         let version = rdr.read_f32::<LE>()?;
@@ -277,8 +287,8 @@ enum BoneWeight {
     },
 }
 
-impl BoneWeight {
-    fn from_reader<RExt: ReaderExt>(rdr: &mut RExt, index_size: u8) -> Result<BoneWeight, io::Error> {
+impl FromReader<u8> for BoneWeight {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, index_size: u8) -> Result<BoneWeight, io::Error> {
         let bone_weight = match rdr.read_u8()? {
             0 => BoneWeight::BDEF1 { index: rdr.read_index(index_size)? },
             1 => BoneWeight::BDEF2 { indices: rdr.read_indices2(index_size)?, weight: rdr.read_f32::<LE>()? },
@@ -302,8 +312,8 @@ struct Vertex {
     edge_scale: f32,
 }
 
-impl Vertex {
-    fn from_reader<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Vertex, io::Error> {
+impl<'a> FromReader<&'a Globals> for Vertex {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Vertex, io::Error> {
         let pos = rdr.read_vec3()?;
         let normal = rdr.read_vec3()?;
         let uv = rdr.read_vec2()?;
@@ -311,7 +321,7 @@ impl Vertex {
         for _ in 0..globals.additional {
             additional.push(rdr.read_vec4()?);
         }
-        let bone_weight = BoneWeight::from_reader(rdr, globals.bone_index_size)?;
+        let bone_weight = BoneWeight::from_reader_arg(rdr, globals.bone_index_size)?;
         let edge_scale = rdr.read_f32::<LE>()?;
         
         Ok(Vertex {
@@ -328,8 +338,8 @@ impl Vertex {
 #[derive(Debug)]
 struct Face(i32, i32, i32);
 
-impl Face {
-    fn from_reader<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Face, io::Error> {
+impl<'a> FromReader<&'a Globals> for Face {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Face, io::Error> {
         let face = match globals.vertex_index_size {
             1 => Face(rdr.read_u8()? as i32, rdr.read_u8()? as i32, rdr.read_u8()? as i32),
             2 => Face(rdr.read_u16::<LE>()? as i32, rdr.read_u16::<LE>()? as i32, rdr.read_u16::<LE>()? as i32),
@@ -343,8 +353,8 @@ impl Face {
 #[derive(Debug)]
 struct Texture(String);
 
-impl Texture {
-    fn from_reader<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Texture, io::Error> {
+impl<'a> FromReader<&'a Globals> for Texture {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Texture, io::Error> {
         let s = rdr.read_nstring(globals.encoding)?;
         Ok(Texture(s))
     }
@@ -399,8 +409,8 @@ struct Material {
     num_vertex_indices: i32,
 }
 
-impl Material {
-    fn from_reader<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Material, io::Error> {
+impl<'a> FromReader<&'a Globals> for Material {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Material, io::Error> {
         let name = rdr.read_nstring(globals.encoding)?;
         let name_en = rdr.read_nstring(globals.encoding)?;
         let diffuse = rdr.read_vec4()?;
