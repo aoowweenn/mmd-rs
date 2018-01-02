@@ -128,17 +128,34 @@ impl<T: ReadBytesExt> ReaderExt for T {}
 pub struct PmxFile {
     header: Header,
     vertices: Vec<Vertex>,
+    faces: Vec<Face>,
+    textures: Vec<Texture>,
 }
 
 impl PmxFile {
     fn from_reader<R: io::Read>(rdr: &mut R) -> Result<PmxFile, io::Error> {
         let header = Header::from_reader(rdr)?;
-        let num_vertices = rdr.read_u32::<LE>()?;
-        let mut vertices = Vec::with_capacity(num_vertices as usize);
+
+        let num_vertices = rdr.read_u32::<LE>()? as usize;
+        let mut vertices = Vec::with_capacity(num_vertices);
         for _ in 0..num_vertices {
             vertices.push(Vertex::from_reader(rdr, &header.globals)?);
         }
-        Ok(PmxFile { header, vertices })
+
+        let num_face_indices = rdr.read_u32::<LE>()? as usize;
+        let num_faces = num_face_indices / 3;
+        let mut faces = Vec::with_capacity(num_faces);
+        for _ in 0..num_faces {
+            faces.push(Face::from_reader(rdr, &header.globals)?);
+        }
+
+        let num_textures = rdr.read_u32::<LE>()? as usize;
+        let mut textures = Vec::with_capacity(num_textures);
+        for _ in 0..num_textures {
+            textures.push(Texture::from_reader(rdr, &header.globals)?);
+        }
+
+        Ok(PmxFile { header, vertices, faces, textures })
     }
 }
 
@@ -301,6 +318,31 @@ impl Vertex {
             bone_weight,
             edge_scale,
         })
+    }
+}
+
+#[derive(Debug)]
+struct Face(i32, i32, i32);
+
+impl Face {
+    fn from_reader<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Face, io::Error> {
+        let face = match globals.vertex_index_size {
+            1 => Face(rdr.read_u8()? as i32, rdr.read_u8()? as i32, rdr.read_u8()? as i32),
+            2 => Face(rdr.read_u16::<LE>()? as i32, rdr.read_u16::<LE>()? as i32, rdr.read_u16::<LE>()? as i32),
+            4 => Face(rdr.read_i32::<LE>()?, rdr.read_i32::<LE>()?, rdr.read_i32::<LE>()?),
+            _ => return Err(err_str("Invalid vertex index size")),
+        };
+        Ok(face)
+    }
+}
+
+#[derive(Debug)]
+struct Texture(String);
+
+impl Texture {
+    fn from_reader<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Texture, io::Error> {
+        let s = rdr.read_nstring(globals.encoding)?;
+        Ok(Texture(s))
     }
 }
 
