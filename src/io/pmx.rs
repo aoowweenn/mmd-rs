@@ -25,6 +25,7 @@ pub type Vec2 = Vector2<f32>;
 pub type Vec3 = Vector3<f32>;
 pub type Vec4 = Vector4<f32>;
 pub type DrawMode = BitFlags<DrawModeFlags>;
+pub type BoneMode = BitFlags<BoneFlags>;
 
 trait FromReader<T> {
     fn from_reader<RExt: ReaderExt>(_rdr: &mut RExt) -> Result<Self, io::Error> where Self: Sized {
@@ -134,6 +135,14 @@ trait ReaderExt: ReadBytesExt {
             StringEnc::UTF8 => self.read_string(n),
         }
     }
+
+    fn read_structs<'a, T: FromReader<&'a Globals>>(&mut self, n: usize, g: &'a Globals) -> Result<Vec<T>, io::Error> where Self: Sized{
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            v.push(T::from_reader_arg(self, g)?);
+        }
+        Ok(v)
+    }
 }
 
 impl<T: ReadBytesExt> ReaderExt for T {}
@@ -145,16 +154,7 @@ pub struct PmxFile {
     faces: Vec<Face>,
     textures: Vec<Texture>,
     materials: Vec<Material>,
-}
-
-impl PmxFile {
-    fn read_structs<'a, T: FromReader<&'a Globals>, RBExt: ReadBytesExt>(rdr: &mut RBExt, n: usize, g: &'a Globals) -> Result<Vec<T>, io::Error> {
-        let mut v = Vec::with_capacity(n);
-        for _ in 0..n {
-            v.push(T::from_reader_arg(rdr, g)?);
-        }
-        Ok(v)
-    }
+    bones: Vec<Bone>,
 }
 
 impl FromReader<()> for PmxFile {
@@ -162,19 +162,22 @@ impl FromReader<()> for PmxFile {
         let header = Header::from_reader(rdr)?;
 
         let num_vertices = rdr.read_u32::<LE>()? as usize;
-        let vertices = PmxFile::read_structs(rdr, num_vertices, &header.globals)?;
+        let vertices = rdr.read_structs(num_vertices, &header.globals)?;
 
         let num_face_indices = rdr.read_u32::<LE>()? as usize;
         let num_faces = num_face_indices / 3;
-        let faces = PmxFile::read_structs(rdr, num_faces, &header.globals)?;
+        let faces = rdr.read_structs(num_faces, &header.globals)?;
 
         let num_textures = rdr.read_u32::<LE>()? as usize;
-        let textures = PmxFile::read_structs(rdr, num_textures, &header.globals)?;
+        let textures = rdr.read_structs(num_textures, &header.globals)?;
         
         let num_materials = rdr.read_u32::<LE>()? as usize;
-        let materials= PmxFile::read_structs(rdr, num_materials, &header.globals)?;
+        let materials = rdr.read_structs(num_materials, &header.globals)?;
 
-        Ok(PmxFile { header, vertices, faces, textures, materials })
+        let num_bones = rdr.read_u32::<LE>()? as usize;
+        let bones = rdr.read_structs(num_bones, &header.globals)?;
+
+        Ok(PmxFile { header, vertices, faces, textures, materials, bones })
     }
 }
 
@@ -475,6 +478,28 @@ struct IKLink {
     limits: Option<(Vec3, Vec3)>,
 }
 
+impl<'a> FromReader<&'a Globals> for IKLink {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<IKLink, io::Error> {
+        let bone_id = rdr.read_index(globals.bone_index_size)?;
+        let enable_limit = match rdr.read_u8()? {
+            1 => true,
+            0 => false,
+            _ => return Err(err_str("Invalid bool value")),
+        };
+
+        let limits = if enable_limit {
+            Some((rdr.read_vec3()?, rdr.read_vec3()?))
+        } else {
+            None
+        };
+
+        Ok(IKLink{
+            bone_id,
+            limits,
+        })
+    }
+}
+
 #[derive(Debug)]
 struct Bone {
     name: String,
@@ -482,12 +507,12 @@ struct Bone {
     pos: Vec3,
     parent_id: i32,
     deform_depth: i32,
-    flags: BoneFlags,
+    flags: BoneMode,
     pos_offset: Option<Vec3>,
     link_id: Option<i32>,
     /// Ret: Some(bone_id, weight)
     append: Option<(i32, f32)>,
-    fixedAxes: Option<Vec3>,
+    fixed_axes: Option<Vec3>,
     /// Ret: Some(rotX, rotZ)
     local_rot: Option<(Vec3, Vec3)>,
     key_value: Option<i32>,
@@ -495,6 +520,68 @@ struct Bone {
     ik: Option<(i32, i32, f32, Vec<IKLink>)>,
 }
 
+impl<'a> FromReader<&'a Globals> for Bone {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Bone, io::Error> {
+        let name = rdr.read_nstring(globals.encoding)?;
+        let name_en = rdr.read_nstring(globals.encoding)?;
+        let pos = rdr.read_vec3()?;
+        let parent_id = rdr.read_index(globals.bone_index_size)?;
+        let deform_depth = rdr.read_i32::<LE>()?;
+        let flags = BitFlags::from_bits(rdr.read_u16::<LE>()?).ok_or(err_str("Invalid Bone Flags"))?;
+        
+        let (pos_offset, link_id) = if flags.contains(BoneFlags::TargetMode) {
+            (None, Some(rdr.read_index(globals.bone_index_size)?))
+        } else {
+            (Some(rdr.read_vec3()?), None)
+        };
+
+        let append = if flags.contains(BoneFlags::AppendRotate) || flags.contains(BoneFlags::AppendTranslate) {
+            Some((rdr.read_index(globals.bone_index_size)?, rdr.read_f32::<LE>()?))
+        } else {
+            None
+        };
+
+        let fixed_axes = if flags.contains(BoneFlags::AxesFixed) {
+            Some(rdr.read_vec3()?)
+        } else {
+            None
+        };
+
+        let local_rot = if flags.contains(BoneFlags::LocalAxes) {
+            Some((rdr.read_vec3()?, rdr.read_vec3()?))
+        } else {
+            None
+        };
+
+        let key_value = if flags.contains(BoneFlags::DeformOuterParent) {
+            Some(rdr.read_i32::<LE>()?)
+        } else {
+            None
+        };
+
+        let ik = if flags.contains(BoneFlags::IK) {
+            let bone_id = rdr.read_index(globals.bone_index_size)?;
+            let num_iter = rdr.read_i32::<LE>()?;
+            let limit = rdr.read_f32::<LE>()?;
+
+            let n = rdr.read_i32::<LE>()? as usize;
+            let links = rdr.read_structs(n, globals)?;
+
+            Some((bone_id, num_iter, limit, links))
+        } else {
+            None
+        };
+
+        Ok(Bone {
+            name, name_en, pos, parent_id,
+            deform_depth, flags, pos_offset,
+            link_id, append, fixed_axes, local_rot,
+            key_value, ik,
+        })
+    }
+}    
+
+#[derive(Debug)]
 struct Reader<R> {
     rdr: BufReader<R>,
 }
