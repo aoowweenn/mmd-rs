@@ -27,10 +27,10 @@ pub type Vec4 = Vector4<f32>;
 pub type DrawMode = BitFlags<DrawModeFlags>;
 
 trait FromReader<T> {
-    fn from_reader<RExt: ReaderExt>(rdr: &mut RExt) -> Result<Self, io::Error> where Self: Sized {
+    fn from_reader<RExt: ReaderExt>(_rdr: &mut RExt) -> Result<Self, io::Error> where Self: Sized {
         Err(err_str("dummy"))
     }
-    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, t: T) -> Result<Self, io::Error> where Self: Sized {
+    fn from_reader_arg<RExt: ReaderExt>(_rdr: &mut RExt, _t: T) -> Result<Self, io::Error> where Self: Sized {
         Err(err_str("dummy"))
     }
 }
@@ -417,9 +417,7 @@ impl<'a> FromReader<&'a Globals> for Material {
         let specular = rdr.read_vec3()?;
         let intensity = rdr.read_f32::<LE>()?;
         let ambient = rdr.read_vec3()?;
-        // TODO: check if enumflags crate has been fixed
-        //let draw_mode = BitFlags::from_bits(rdr.read_u8()?).ok_or(err_str("Invalid Draw Mode"))?;
-        let draw_mode = BitFlags::from_bits_truncate(rdr.read_u8()?);
+        let draw_mode = BitFlags::from_bits(rdr.read_u8()?).ok_or(err_str("Invalid Draw Mode"))?;
         let edge_color = rdr.read_vec4()?;
         let edge_size = rdr.read_f32::<LE>()?;
         let texture_id = rdr.read_index(globals.texture_index_size)?;
