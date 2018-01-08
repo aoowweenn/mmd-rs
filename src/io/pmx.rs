@@ -449,6 +449,52 @@ impl<'a> FromReader<&'a Globals> for Material {
     }
 }
 
+#[derive(EnumFlags, Debug, Clone, Copy)]
+#[repr(u16)]
+pub enum BoneFlags {
+    /// 0: Vec3(pos), 1: bone ID
+    TargetMode = 0x0001,
+    CanRotate = 0x0002,
+    CanTranslate = 0x0004,
+    Visible = 0x0008,
+    CanControl = 0x0010,
+    IK = 0x0020,
+    AppendLocal = 0x0080,
+    AppendRotate = 0x0100,
+    AppendTranslate = 0x0200,
+    AxesFixed = 0x0400,
+    LocalAxes = 0x0800,
+    DeformAfterPhysics = 0x1000,
+    DeformOuterParent = 0x2000,
+}
+
+#[derive(Debug)]
+struct IKLink {
+    bone_id: i32,
+    /// Ret: Some(min, max)
+    limits: Option<(Vec3, Vec3)>,
+}
+
+#[derive(Debug)]
+struct Bone {
+    name: String,
+    name_en: String,
+    pos: Vec3,
+    parent_id: i32,
+    deform_depth: i32,
+    flags: BoneFlags,
+    pos_offset: Option<Vec3>,
+    link_id: Option<i32>,
+    /// Ret: Some(bone_id, weight)
+    append: Option<(i32, f32)>,
+    fixedAxes: Option<Vec3>,
+    /// Ret: Some(rotX, rotZ)
+    local_rot: Option<(Vec3, Vec3)>,
+    key_value: Option<i32>,
+    /// Ret: Some(bone_id, num_iterations, limit, vec![IKLink, n])
+    ik: Option<(i32, i32, f32, Vec<IKLink>)>,
+}
+
 struct Reader<R> {
     rdr: BufReader<R>,
 }
