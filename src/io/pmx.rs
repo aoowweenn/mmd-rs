@@ -12,7 +12,7 @@ use encoding::all::UTF_16LE;
 use encoding::DecoderTrap;
 use encoding::Encoding;
 
-use cgmath::{Vector2, Vector3, Vector4};
+use cgmath::{Vector2, Vector3, Vector4, Quaternion};
 
 /*
 #[derive(Debug)]
@@ -24,6 +24,7 @@ enum PmxError {
 pub type Vec2 = Vector2<f32>;
 pub type Vec3 = Vector3<f32>;
 pub type Vec4 = Vector4<f32>;
+pub type Quat = Quaternion<f32>;
 pub type DrawMode = BitFlags<DrawModeFlags>;
 pub type BoneMode = BitFlags<BoneFlags>;
 
@@ -115,6 +116,13 @@ trait ReaderExt: ReadBytesExt {
         Ok(Vec4::from(array4))
     }
 
+    /// TODO: make sure s first v last
+    fn read_quat(&mut self) -> Result<Quat, io::Error> {
+        let s = self.read_f32::<LE>()?;
+        let v = self.read_vec3()?;
+        Ok(Quat::from_sv(s, v))
+    }
+
     /// TODO: handle String Error
     fn read_string(&mut self, n: usize) -> Result<String, io::Error> {
         Ok(String::from_utf8(self.read_vec(n)?).expect("Invalid String"))
@@ -155,6 +163,7 @@ pub struct PmxFile {
     textures: Vec<Texture>,
     materials: Vec<Material>,
     bones: Vec<Bone>,
+    morphs: Vec<Morph>,
 }
 
 impl FromReader<()> for PmxFile {
@@ -176,8 +185,15 @@ impl FromReader<()> for PmxFile {
 
         let num_bones = rdr.read_u32::<LE>()? as usize;
         let bones = rdr.read_structs(num_bones, &header.globals)?;
+        
+        let num_morphs = rdr.read_u32::<LE>()? as usize;
+        let morphs = rdr.read_structs(num_morphs, &header.globals)?;
 
-        Ok(PmxFile { header, vertices, faces, textures, materials, bones })
+        Ok(PmxFile {
+            header, vertices, faces,
+            textures, materials, bones,
+            morphs,
+        })
     }
 }
 
@@ -306,7 +322,7 @@ impl FromReader<u8> for BoneWeight {
 
 #[derive(Debug, PartialEq)]
 struct Vertex {
-    pos: Vec3,
+    position: Vec3,
     normal: Vec3,
     uv: Vec2,
     additional: Vec<Vec4>,
@@ -317,7 +333,7 @@ struct Vertex {
 
 impl<'a> FromReader<&'a Globals> for Vertex {
     fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Vertex, io::Error> {
-        let pos = rdr.read_vec3()?;
+        let position = rdr.read_vec3()?;
         let normal = rdr.read_vec3()?;
         let uv = rdr.read_vec2()?;
         let mut additional = Vec::with_capacity(globals.additional as usize);
@@ -328,7 +344,7 @@ impl<'a> FromReader<&'a Globals> for Vertex {
         let edge_scale = rdr.read_f32::<LE>()?;
         
         Ok(Vertex {
-            pos,
+            position,
             normal,
             uv,
             additional,
@@ -455,7 +471,7 @@ impl<'a> FromReader<&'a Globals> for Material {
 #[derive(EnumFlags, Debug, Clone, Copy)]
 #[repr(u16)]
 pub enum BoneFlags {
-    /// 0: Vec3(pos), 1: bone ID
+    /// 0: position, 1: bone ID
     TargetMode = 0x0001,
     CanRotate = 0x0002,
     CanTranslate = 0x0004,
@@ -504,11 +520,11 @@ impl<'a> FromReader<&'a Globals> for IKLink {
 struct Bone {
     name: String,
     name_en: String,
-    pos: Vec3,
+    position: Vec3,
     parent_id: i32,
     deform_depth: i32,
     flags: BoneMode,
-    pos_offset: Option<Vec3>,
+    position_offset: Option<Vec3>,
     link_id: Option<i32>,
     /// Ret: Some(bone_id, weight)
     append: Option<(i32, f32)>,
@@ -524,12 +540,12 @@ impl<'a> FromReader<&'a Globals> for Bone {
     fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Bone, io::Error> {
         let name = rdr.read_nstring(globals.encoding)?;
         let name_en = rdr.read_nstring(globals.encoding)?;
-        let pos = rdr.read_vec3()?;
+        let position = rdr.read_vec3()?;
         let parent_id = rdr.read_index(globals.bone_index_size)?;
         let deform_depth = rdr.read_i32::<LE>()?;
         let flags = BitFlags::from_bits(rdr.read_u16::<LE>()?).ok_or(err_str("Invalid Bone Flags"))?;
         
-        let (pos_offset, link_id) = if flags.contains(BoneFlags::TargetMode) {
+        let (position_offset, link_id) = if flags.contains(BoneFlags::TargetMode) {
             (None, Some(rdr.read_index(globals.bone_index_size)?))
         } else {
             (Some(rdr.read_vec3()?), None)
@@ -573,13 +589,250 @@ impl<'a> FromReader<&'a Globals> for Bone {
         };
 
         Ok(Bone {
-            name, name_en, pos, parent_id,
-            deform_depth, flags, pos_offset,
+            name, name_en, position, parent_id,
+            deform_depth, flags, position_offset,
             link_id, append, fixed_axes, local_rot,
             key_value, ik,
         })
     }
-}    
+}
+
+enum_from_primitive! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(u8)]
+    enum MorphType {
+        Group,
+        Position,
+        Bone,
+        UV,
+        AddUV1,
+        AddUV2,
+        AddUV3,
+        AddUV4,
+        Material,
+        Flip,
+        Impulse,
+    }
+}
+
+#[derive(Debug)]
+struct PositionMorph {
+    vertex_id: i32,
+    position: Vec3,
+}
+
+impl<'a> FromReader<&'a Globals> for PositionMorph {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<PositionMorph, io::Error> {
+        let vertex_id = rdr.read_index(globals.vertex_index_size)?;
+        let position = rdr.read_vec3()?;
+        Ok(PositionMorph { vertex_id, position })
+    }
+}
+
+#[derive(Debug)]
+struct UVMorph {
+    vertex_id: i32,
+    uv: Vec4,
+}
+
+impl<'a> FromReader<&'a Globals> for UVMorph {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<UVMorph, io::Error> {
+        let vertex_id = rdr.read_index(globals.vertex_index_size)?;
+        let uv = rdr.read_vec4()?;
+        Ok(UVMorph { vertex_id, uv })
+    }
+}
+
+#[derive(Debug)]
+struct BoneMorph {
+    bone_id: i32,
+    position: Vec3,
+    quaternion: Quat,
+}
+
+impl<'a> FromReader<&'a Globals> for BoneMorph {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<BoneMorph, io::Error> {
+        let bone_id = rdr.read_index(globals.bone_index_size)?;
+        let position = rdr.read_vec3()?;
+        let quaternion = rdr.read_quat()?;
+        Ok(BoneMorph { bone_id, position, quaternion })
+    }
+}
+
+enum_from_primitive! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(u8)]
+    enum OpType {
+        MUL, ADD,
+    }
+}
+
+#[derive(Debug)]
+struct MaterialMorph {
+    material_id: i32,
+    op_type: OpType,
+    diffuse: Vec4,
+    specular: Vec3,
+    intensity: f32,
+    ambient: Vec3,
+    edge_color: Vec4,
+    edge_size: f32,
+    texture_factor: Vec4,
+    sphere_texture_factor: Vec4,
+    toon_texture_factor: Vec4,
+}
+
+impl<'a> FromReader<&'a Globals> for MaterialMorph {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<MaterialMorph, io::Error> {
+        let material_id = rdr.read_index(globals.material_index_size)?;
+        let op_type = OpType::from_u8(rdr.read_u8()?).ok_or(err_str("Unkown Material Op type"))?;
+        let diffuse = rdr.read_vec4()?;
+        let specular = rdr.read_vec3()?;
+        let intensity = rdr.read_f32::<LE>()?;
+        let ambient = rdr.read_vec3()?;
+        let edge_color = rdr.read_vec4()?;
+        let edge_size = rdr.read_f32::<LE>()?;
+        let texture_factor = rdr.read_vec4()?;
+        let sphere_texture_factor = rdr.read_vec4()?;
+        let toon_texture_factor = rdr.read_vec4()?;
+
+        Ok(MaterialMorph {
+            material_id,
+            op_type,
+            diffuse,
+            specular,
+            intensity,
+            ambient,
+            edge_color,
+            edge_size,
+            texture_factor,
+            sphere_texture_factor,
+            toon_texture_factor,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct GroupMorph {
+    morph_id: i32,
+    weight: f32,
+}
+
+impl<'a> FromReader<&'a Globals> for GroupMorph {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<GroupMorph, io::Error> {
+        let morph_id = rdr.read_index(globals.morph_index_size)?;
+        let weight = rdr.read_f32::<LE>()?;
+        Ok(GroupMorph { morph_id, weight })
+    }
+}
+
+#[derive(Debug)]
+struct FlipMorph {
+    morph_id: i32,
+    weight: f32,
+}
+
+impl<'a> FromReader<&'a Globals> for FlipMorph {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<FlipMorph, io::Error> {
+        let morph_id = rdr.read_index(globals.morph_index_size)?;
+        let weight = rdr.read_f32::<LE>()?;
+        Ok(FlipMorph { morph_id, weight })
+    }
+}
+
+#[derive(Debug)]
+struct ImpulseMorph {
+    rigidbody_id: i32,
+    /// 0: OFF, 1: ON
+    local_flag: u8,
+    translate_velocity: Vec3, // Force?
+    rotate_torque: Vec3, // Torque?
+}
+
+impl<'a> FromReader<&'a Globals> for ImpulseMorph {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<ImpulseMorph, io::Error> {
+        let rigidbody_id = rdr.read_index(globals.rigidbody_index_size)?;
+        let local_flag = rdr.read_u8()?;
+        let translate_velocity = rdr.read_vec3()?;
+        let rotate_torque = rdr.read_vec3()?;
+        Ok(ImpulseMorph {
+            rigidbody_id, local_flag,
+            translate_velocity,  rotate_torque,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct Morph {
+    name: String,
+    name_en: String,
+    /// 0: reserved, 1: eyebrow, 2: eye, 3: mouth, 4: others
+    control_panel: u8,
+    morph_type: MorphType,
+    position_v: Vec<PositionMorph>,
+    uv_v: Vec<UVMorph>,
+    bone_v: Vec<BoneMorph>,
+    material_v: Vec<MaterialMorph>,
+    group_v: Vec<GroupMorph>,
+    flip_v: Vec<FlipMorph>,
+    impulse_v: Vec<ImpulseMorph>,
+}
+
+impl<'a> FromReader<&'a Globals> for Morph {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<Morph, io::Error> {
+        let name = rdr.read_nstring(globals.encoding)?;
+        let name_en = rdr.read_nstring(globals.encoding)?;
+        let control_panel = rdr.read_u8()?;
+        let morph_type = MorphType::from_u8(rdr.read_u8()?).ok_or(err_str("Unkown morph type"))?;
+        let n = rdr.read_i32::<LE>()? as usize;
+
+        let position_v = if morph_type == MorphType::Position {
+            rdr.read_structs(n, globals)?
+        } else { Vec::new() };
+
+        let uv_v = if morph_type == MorphType::UV ||
+                morph_type == MorphType::AddUV1 ||
+                morph_type == MorphType::AddUV2 ||
+                morph_type == MorphType::AddUV3 ||
+                morph_type == MorphType::AddUV4 {
+            rdr.read_structs(n, globals)?
+        } else { Vec::new() };
+
+        let bone_v = if morph_type == MorphType::Bone {
+            rdr.read_structs(n, globals)?
+        } else { Vec::new() };
+
+        let material_v = if morph_type == MorphType::Material {
+            rdr.read_structs(n, globals)?
+        } else { Vec::new() };
+
+        let group_v = if morph_type == MorphType::Group {
+            rdr.read_structs(n, globals)?
+        } else { Vec::new() };
+
+        let flip_v = if morph_type == MorphType::Flip {
+            rdr.read_structs(n, globals)?
+        } else { Vec::new() };
+        
+        let impulse_v = if morph_type == MorphType::Impulse {
+            rdr.read_structs(n, globals)?
+        } else { Vec::new() };
+
+        Ok(Morph {            
+            name,
+            name_en,
+            control_panel,
+            morph_type,
+            position_v,
+            uv_v,
+            bone_v,
+            material_v,
+            group_v,
+            flip_v,
+            impulse_v,
+        })
+    }
+}
 
 #[derive(Debug)]
 struct Reader<R> {
