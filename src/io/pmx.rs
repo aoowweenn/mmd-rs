@@ -164,6 +164,7 @@ pub struct PmxFile {
     materials: Vec<Material>,
     bones: Vec<Bone>,
     morphs: Vec<Morph>,
+    display_frames: Vec<DisplayFrame>,
 }
 
 impl FromReader<()> for PmxFile {
@@ -189,10 +190,13 @@ impl FromReader<()> for PmxFile {
         let num_morphs = rdr.read_u32::<LE>()? as usize;
         let morphs = rdr.read_structs(num_morphs, &header.globals)?;
 
+        let num_display_frames = rdr.read_u32::<LE>()? as usize;
+        let display_frames = rdr.read_structs(num_display_frames, &header.globals)?;
+
         Ok(PmxFile {
             header, vertices, faces,
             textures, materials, bones,
-            morphs,
+            morphs, display_frames,
         })
     }
 }
@@ -830,6 +834,66 @@ impl<'a> FromReader<&'a Globals> for Morph {
             group_v,
             flip_v,
             impulse_v,
+        })
+    }
+}
+
+enum_from_primitive! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(u8)]
+    enum FrameType {
+        DefaultFrame,
+        SpecialFrame,
+    }
+}
+
+enum_from_primitive! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(u8)]
+    enum TargetType {
+        BoneIndex,
+        MorphIndex,
+    }
+}
+
+#[derive(Debug)]
+struct Target {
+    target_type: TargetType,
+    index: i32,
+}
+
+#[derive(Debug)]
+struct DisplayFrame {
+    name: String,
+    name_en: String,
+    frame_type: FrameType,
+    targets: Vec<Target>,
+}
+
+impl<'a> FromReader<&'a Globals> for DisplayFrame {
+    fn from_reader_arg<RExt: ReaderExt>(rdr: &mut RExt, globals: &Globals) -> Result<DisplayFrame, io::Error> {
+        let name = rdr.read_nstring(globals.encoding)?;
+        let name_en = rdr.read_nstring(globals.encoding)?;
+        let frame_type = FrameType::from_u8(rdr.read_u8()?).ok_or(err_str("Unkown frame type"))?;
+        let n = rdr.read_i32::<LE>()?;
+        let mut targets = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            let target_type = TargetType::from_u8(rdr.read_u8()?).ok_or(err_str("Unknown target type"))?;
+            let index_size = match target_type {
+                TargetType::BoneIndex => globals.bone_index_size,
+                TargetType::MorphIndex => globals.morph_index_size,
+            };
+            targets.push(Target {
+                target_type,
+                index: rdr.read_index(index_size)?
+            });
+        }
+
+        Ok(DisplayFrame {
+            name,
+            name_en,
+            frame_type,
+            targets,
         })
     }
 }
