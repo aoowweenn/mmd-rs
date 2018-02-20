@@ -3,12 +3,15 @@ extern crate cgmath;
 extern crate encoding;
 
 extern crate num;
-#[macro_use]
-extern crate enum_primitive;
+//#[macro_use]
+//extern crate enum_primitive;
 
 extern crate enumflags;
 #[macro_use]
 extern crate enumflags_derive;
+
+#[macro_use]
+extern crate pod_io;
 
 /*
 #[macro_use]
@@ -36,7 +39,7 @@ mod tests {
         buf.push("江風ver1.05.pmx");
         assert!(buf.file_name().is_some());
         println!("{:?}", buf.to_str());
-        let res = io::pmx::from_file(buf);
+        let res = io::pmx::PmxFile::from_file(buf);
         match res {
             Ok(data) => println!("{:?}", data),
             Err(e) => {

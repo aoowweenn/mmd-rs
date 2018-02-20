@@ -9,6 +9,7 @@ byteorder = "1"
 encoding = "*"
 cgmath = "*"
 num = "*"
-enum_primitive = "*"
+enum-primitive-derive = "*"
 enumflags = "*"
 enumflags_derive = "*"
+pod_io = { path = "../pod-io" }
