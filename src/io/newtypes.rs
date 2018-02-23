@@ -1,6 +1,7 @@
 use cgmath::{Vector2, Vector3, Vector4};
 use byteorder::{ByteOrder, LE};
 use pod_io::{Decode, Nil};
+use enumflags::*;
 use std::io::{Read, Result};
 
 #[derive(Debug)]
@@ -54,3 +55,35 @@ impl<R: Read> Decode<R, usize> for Array<Vec4> {
 }
 
 pub trait BigStruct {}
+
+#[derive(Debug)]
+pub struct ModeSet<T: RawBitFlags + BitFlagsFmt>(pub BitFlags<T>);
+
+impl<T: RawBitFlags + BitFlagsFmt> ::std::ops::Deref for ModeSet<T> {
+    type Target = BitFlags<T>;
+    fn deref(&self) -> &BitFlags<T> {
+        &self.0
+    }
+}
+
+macro_rules! impl_decode_modeset {
+    ($ty:ty, $repr:ty) => (
+        impl<R: Read> Decode<R, Nil> for ModeSet<$ty> {
+            fn decode<B: ByteOrder>(r: &mut R, _p: Nil) -> Result<ModeSet<$ty>> {
+                BitFlags::from_bits(<$repr>::decode::<LE>(r, Nil)?)
+                    .map(|x| ModeSet(x))
+                    .ok_or(err(concat!("Invalid ", stringify!($ty), " ModeSet")))
+            }
+        }
+    )
+}
+
+macro_rules! impl_decode_mode {
+    ($ty:ty, $repr:ty) => (
+        impl<R: Read> Decode<R, Nil> for $ty {
+            fn decode<B: ByteOrder>(r: &mut R, _p: Nil) -> Result<$ty> {
+                <$ty>::from_u8(<$repr>::decode::<LE>(r, Nil)?).ok_or(err(concat!("Invalid ", stringify!($ty), " Mode")))
+            }
+        }
+    )
+}

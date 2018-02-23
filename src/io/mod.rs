@@ -1,5 +1,7 @@
-pub mod pmx;
+#[macro_use]
 mod newtypes;
+
+pub mod pmx;
 
 use self::pmx::PmxFile;
 
@@ -8,11 +10,16 @@ use std::io::{Read, Result};
 use std::marker::Sized;
 
 trait Load {
-    fn load<R: Read>(rdr: &mut R) -> Result<Self> where Self: Sized;
+    fn load<R: Read>(rdr: &mut R) -> Result<Self>
+    where
+        Self: Sized;
 }
 
 trait FromFile {
-    fn _from_file<P: AsRef<Path>>(path: P) -> Result<Self> where Self: Sized + Load {
+    fn _from_file<P: AsRef<Path>>(path: P) -> Result<Self>
+    where
+        Self: Sized + Load,
+    {
         use std::fs::File;
         use std::io::BufReader;
         let f = File::open(path)?;

@@ -2,9 +2,9 @@ extern crate byteorder;
 extern crate cgmath;
 extern crate encoding;
 
-extern crate num;
-//#[macro_use]
-//extern crate enum_primitive;
+#[macro_use]
+extern crate enum_primitive_derive;
+extern crate num_traits;
 
 extern crate enumflags;
 #[macro_use]
