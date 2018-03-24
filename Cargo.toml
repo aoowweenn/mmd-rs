@@ -7,9 +7,14 @@ authors = ["aoowweenn <aoowweenn@gmail.com>"]
 [dependencies]
 byteorder = "1"
 encoding = "*"
-cgmath = "*"
+cgmath = { version = "*", features = ["mint"] }
 num-traits = "*"
 enum-primitive-derive = "*"
 enumflags = "*"
 enumflags_derive = "*"
-pod_io = { path = "../pod-io" }
+pod_io = { path = "../pod-io-rs" }
+three = "0.3.1"
+mint = "0.5"
+
+[[example]]
+name = "three-viewer"

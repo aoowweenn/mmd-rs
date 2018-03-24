@@ -4,7 +4,7 @@ use std::io::{Error, Read, Result};
 
 use byteorder::{ByteOrder, ReadBytesExt, LE};
 use pod_io::{Decode, Nil};
-use num_traits::FromPrimitive;
+use num_traits::{FromPrimitive, Bounded};
 use enumflags::BitFlags;
 
 fn err(s: &str) -> Error {
@@ -46,10 +46,14 @@ impl<R: Read> PmxHelper<R> {
     }
     fn read_index<T: Decode<R, Nil>>(r: &mut R) -> Result<i32>
     where
-        i32: ::std::convert::From<T>,
+        i32: ::std::convert::From<T>, T: Bounded + ::std::cmp::PartialEq
     {
         let raw = T::decode::<LE>(r, Nil)?;
-        Ok(i32::from(raw))
+        if raw == T::max_value() {
+            Ok(-1)
+        } else {
+            Ok(i32::from(raw))
+        }
     }
     fn from_header(h: &Header) -> Result<Self> {
         let read_string = match h.encode {
@@ -60,8 +64,8 @@ impl<R: Read> PmxHelper<R> {
         macro_rules! fn_index {
             ($size:expr) => (
                 match $size {
-                    1 => Self::read_index::<i8>,
-                    2 => Self::read_index::<i16>,
+                    1 => Self::read_index::<u8>,
+                    2 => Self::read_index::<u16>,
                     4 => Self::read_index::<i32>,
                     _ => return Err(err("unknown index size")),
                 }
@@ -90,9 +94,9 @@ impl<R: Read> PmxHelper<R> {
 pub struct PmxFile {
     magic: [u8; 4],
     header: Header,
-    model_name: Name,
-    comment: Name,
-    model: Model,
+    pub model_name: Name,
+    pub comment: Name,
+    pub model: Model,
 }
 
 impl Load for PmxFile {
@@ -131,7 +135,7 @@ struct Header {
 }
 
 #[derive(Debug)]
-struct PmxString(String);
+pub struct PmxString(String);
 
 impl<'a, R: Read> Decode<R, &'a fn(r: &mut R) -> Result<String>> for PmxString {
     fn decode<B: ByteOrder>(r: &mut R, p: &fn(r: &mut R) -> Result<String>) -> Result<PmxString> {
@@ -141,7 +145,7 @@ impl<'a, R: Read> Decode<R, &'a fn(r: &mut R) -> Result<String>> for PmxString {
 
 #[derive(Debug, Decode)]
 #[Parameter = "&'a PmxHelper<R>"]
-struct Name {
+pub struct Name {
     #[Arg = "&p.read_string"]
     jp: PmxString,
     #[Arg = "&p.read_string"]
@@ -149,7 +153,7 @@ struct Name {
 }
 
 #[derive(Debug)]
-struct Index(i32);
+pub struct Index(pub i32);
 
 impl<'a, R: Read> Decode<R, &'a fn(r: &mut R) -> Result<i32>> for Index {
     fn decode<B: ByteOrder>(r: &mut R, p: &fn(r: &mut R) -> Result<i32>) -> Result<Index> {
@@ -166,11 +170,11 @@ impl BigStruct for IKLink {}
 
 #[derive(Debug, Decode)]
 #[Parameter = "&'a PmxHelper<R>"]
-struct Model {
+pub struct Model {
     #[Arg = "p"]
-    vertices: Array<Vertex>,
+    pub vertices: Array<Vertex>,
     #[Arg = "&p.read_vertex_index"]
-    face_indices: Array<Index>,
+    pub face_indices: Array<Index>,
     #[Arg = "p"]
     textures: Array<Texture>,
     #[Arg = "p"]
@@ -181,8 +185,8 @@ struct Model {
 
 #[derive(Debug, Decode)]
 #[Parameter = "&'a PmxHelper<R>"]
-struct Vertex {
-    position: Vec3,
+pub struct Vertex {
+    pub position: Vec3,
     normal: Vec3,
     uv: Vec2,
     #[Arg = "p.additional"]

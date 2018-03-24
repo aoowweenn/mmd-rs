@@ -5,11 +5,11 @@ use enumflags::*;
 use std::io::{Read, Result};
 
 #[derive(Debug)]
-pub struct Vec2(Vector2<f32>);
+pub struct Vec2(pub Vector2<f32>);
 #[derive(Debug)]
-pub struct Vec3(Vector3<f32>);
+pub struct Vec3(pub Vector3<f32>);
 #[derive(Debug)]
-pub struct Vec4(Vector4<f32>);
+pub struct Vec4(pub Vector4<f32>);
 
 impl<R: Read> Decode<R, Nil> for Vec2 {
     fn decode<B: ByteOrder>(r: &mut R, p: Nil) -> Result<Vec2> {
