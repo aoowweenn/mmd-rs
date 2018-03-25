@@ -7,9 +7,9 @@ use pod_io::{Decode, Nil};
 use num_traits::{FromPrimitive, Bounded};
 use enumflags::BitFlags;
 
-fn err(s: &str) -> Error {
+fn err<T: AsRef<str>>(s: T) -> Error {
     use std::io::ErrorKind;
-    Error::new(ErrorKind::Other, s)
+    Error::new(ErrorKind::Other, s.as_ref())
 }
 
 fn create_vec<T>(n: usize) -> Vec<T> {
@@ -106,9 +106,12 @@ impl Load for PmxFile {
             return Err(err("Unknown Format"));
         }
         let header = Header::decode::<LE>(rdr, Nil)?;
+        println!("{:?}", header);
         let helper = PmxHelper::from_header(&header)?;
         let model_name = Name::decode::<LE>(rdr, &helper)?;
+        println!("{:?}", model_name);
         let comment = Name::decode::<LE>(rdr, &helper)?;
+        println!("{:?}", comment);
         let model = Model::decode::<LE>(rdr, &helper)?;
         Ok(PmxFile {
             magic,
@@ -135,7 +138,7 @@ struct Header {
 }
 
 #[derive(Debug)]
-pub struct PmxString(String);
+pub struct PmxString(pub String);
 
 impl<'a, R: Read> Decode<R, &'a fn(r: &mut R) -> Result<String>> for PmxString {
     fn decode<B: ByteOrder>(r: &mut R, p: &fn(r: &mut R) -> Result<String>) -> Result<PmxString> {
@@ -147,9 +150,9 @@ impl<'a, R: Read> Decode<R, &'a fn(r: &mut R) -> Result<String>> for PmxString {
 #[Parameter = "&'a PmxHelper<R>"]
 pub struct Name {
     #[Arg = "&p.read_string"]
-    jp: PmxString,
+    pub jp: PmxString,
     #[Arg = "&p.read_string"]
-    en: PmxString,
+    pub en: PmxString,
 }
 
 #[derive(Debug)]
@@ -176,11 +179,11 @@ pub struct Model {
     #[Arg = "&p.read_vertex_index"]
     pub face_indices: Array<Index>,
     #[Arg = "p"]
-    textures: Array<Texture>,
+    pub textures: Array<Texture>,
     #[Arg = "p"]
-    materials: Array<Material>,
+    pub materials: Array<Material>,
     #[Arg = "p"]
-    bones: Array<Bone>,
+    pub bones: Array<Bone>,
 }
 
 #[derive(Debug, Decode)]
@@ -188,7 +191,7 @@ pub struct Model {
 pub struct Vertex {
     pub position: Vec3,
     normal: Vec3,
-    uv: Vec2,
+    pub uv: Vec2,
     #[Arg = "p.additional"]
     additional: Array<Vec4>,
     #[Arg = "p"]
@@ -225,7 +228,7 @@ enum BoneWeight {
 impl<'a, R: Read> Decode<R, &'a PmxHelper<R>> for BoneWeight {
     fn decode<B: ByteOrder>(r: &mut R, p: &PmxHelper<R>) -> Result<BoneWeight> {
         use self::BoneWeight::{BDEF1, BDEF2, BDEF4, QDEF, SDEF};
-        let fi = p.read_vertex_index;
+        let fi = p.read_bone_index;
         let fw = |r: &mut R| f32::decode::<LE>(r, Nil);
         let fv = |r: &mut R| Vec3::decode::<LE>(r, Nil);
         let ty = u8::decode::<LE>(r, Nil)?;
@@ -250,14 +253,14 @@ impl<'a, R: Read> Decode<R, &'a PmxHelper<R>> for BoneWeight {
                 indices: [fi(r)?, fi(r)?, fi(r)?, fi(r)?],
                 weights: [fw(r)?, fw(r)?, fw(r)?, fw(r)?],
             },
-            _ => return Err(err("Invalid BoneWeigth Type")),
+            _ => return Err(err(format!("Invalid BoneWeight Type {}", ty))),
         };
         Ok(bone_weight)
     }
 }
 
 #[derive(Debug)]
-struct Texture(PmxString);
+pub struct Texture(pub PmxString);
 
 impl<'a, R: Read> Decode<R, &'a PmxHelper<R>> for Texture {
     fn decode<B: ByteOrder>(r: &mut R, p: &PmxHelper<R>) -> Result<Texture> {
@@ -303,9 +306,9 @@ impl_decode_mode!(ToonMode, u8);
 
 #[derive(Debug, Decode)]
 #[Parameter = "&'a PmxHelper<R>"]
-struct Material {
+pub struct Material {
     #[Arg = "p"]
-    name: Name,
+    pub name: Name,
     diffuse: Vec4,
     specular: Vec3,
     intensity: f32,
@@ -314,16 +317,16 @@ struct Material {
     edge_color: Vec4,
     edge_size: f32,
     #[Arg = "&p.read_texture_index"]
-    texture_id: Index,
+    pub texture_id: Index,
     #[Arg = "&p.read_texture_index"]
-    sphere_texture_id: Index,
+    pub sphere_texture_id: Index,
     sphere_mode: SphereMode,
     toon_mode: ToonMode,
     #[Arg = "&p.read_texture_index"]
-    toon_texture_id: Index,
+    pub toon_texture_id: Index,
     #[Arg = "&p.read_string"]
     memo: PmxString,
-    num_vertex_indices: i32,
+    pub num_vertex_indices: i32,
 }
 
 #[derive(EnumFlags, Debug, Clone, Copy)]
@@ -368,7 +371,7 @@ impl<'a, R: Read> Decode<R, &'a PmxHelper<R>> for IKLink {
 
 #[derive(Debug, Decode)]
 #[Parameter = "&'a PmxHelper<R>"]
-struct Bone {
+pub struct Bone {
     #[Arg = "&p.read_string"]
     name: PmxString,
     #[Arg = "&p.read_string"]
