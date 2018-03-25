@@ -130,15 +130,29 @@ fn main() {
         mesh.set_position([10.0, -10.0, 0.0])
     }
 
-    let mut angle = cgmath::Rad::zero();
+    let mut q = cgmath::Quaternion::from_angle_y(cgmath::Deg(180.0));
+
+    let f_rot = |q: cgmath::Quaternion<_>, m1: &three::Mesh, m2: &PmxModel| {
+        m1.set_orientation(q);
+        for mesh in m2.meshes.iter() {
+            mesh.set_orientation(q);
+        }
+    };
+
+    f_rot(q, &mmd_mesh, &mmd_with_texture);
+
+    let mut angle_y = cgmath::Rad::zero();
+    let mut angle_x = cgmath::Rad::zero();
     while win.update() && !win.input.hit(three::KEY_ESCAPE) {
         if let Some(diff) = win.input.timed(three::AXIS_LEFT_RIGHT) {
-            angle += cgmath::Rad(1.5 * diff);
-            let q = cgmath::Quaternion::from_angle_y(angle);
-            mmd_mesh.set_orientation(q);
-            for mesh in mmd_with_texture.meshes.iter() {
-                mesh.set_orientation(q);
-            }
+            angle_y = cgmath::Rad(1.5 * diff);
+            q = cgmath::Quaternion::from_angle_y(angle_y) * q;
+            f_rot(q, &mmd_mesh, &mmd_with_texture);
+        }
+        else if let Some(diff) = win.input.timed(three::AXIS_DOWN_UP) {
+            angle_x = cgmath::Rad(1.5 * diff);
+            q = cgmath::Quaternion::from_angle_x(angle_x) * q;
+            f_rot(q, &mmd_mesh, &mmd_with_texture);
         }
         win.render(&cam);
     }

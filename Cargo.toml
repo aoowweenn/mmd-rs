@@ -12,7 +12,7 @@ num-traits = "*"
 enum-primitive-derive = "*"
 enumflags = "*"
 enumflags_derive = "*"
-pod_io = { path = "../pod-io-rs" }
+pod_io = { git = "https://github.com/aoowweenn/pod-io-rs.git" }
 three = "0.3.1"
 mint = "0.5"
 
