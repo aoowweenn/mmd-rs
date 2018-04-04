@@ -7,14 +7,20 @@ authors = ["aoowweenn <aoowweenn@gmail.com>"]
 [dependencies]
 byteorder = "1"
 encoding = "*"
-cgmath = { version = "*", features = ["mint"] }
+cgmath = "*"
 num-traits = "*"
 enum-primitive-derive = "*"
 enumflags = "*"
 enumflags_derive = "*"
 pod_io = { git = "https://github.com/aoowweenn/pod-io-rs.git" }
+
+[dev-dependencies]
 three = "0.3.1"
 mint = "0.5"
+cgmath = { version = "*", features = ["mint"] }
 
 [[example]]
 name = "three-viewer"
+
+[workspace]
+members = ["examples/viewer"]

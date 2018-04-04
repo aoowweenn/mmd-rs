@@ -3,9 +3,9 @@ use super::newtypes::*;
 use std::io::{Error, Read, Result};
 
 use byteorder::{ByteOrder, ReadBytesExt, LE};
-use pod_io::{Decode, Nil};
-use num_traits::{FromPrimitive, Bounded};
 use enumflags::BitFlags;
+use num_traits::{Bounded, FromPrimitive};
+use pod_io::{Decode, Nil};
 
 fn err<T: AsRef<str>>(s: T) -> Error {
     use std::io::ErrorKind;
@@ -46,7 +46,8 @@ impl<R: Read> PmxHelper<R> {
     }
     fn read_index<T: Decode<R, Nil>>(r: &mut R) -> Result<i32>
     where
-        i32: ::std::convert::From<T>, T: Bounded + ::std::cmp::PartialEq
+        i32: ::std::convert::From<T>,
+        T: Bounded + ::std::cmp::PartialEq,
     {
         let raw = T::decode::<LE>(r, Nil)?;
         if raw == T::max_value() {
@@ -62,14 +63,14 @@ impl<R: Read> PmxHelper<R> {
             _ => return Err(err("unknown encoding")),
         };
         macro_rules! fn_index {
-            ($size:expr) => (
+            ($size:expr) => {
                 match $size {
                     1 => Self::read_index::<u8>,
                     2 => Self::read_index::<u16>,
                     4 => Self::read_index::<i32>,
                     _ => return Err(err("unknown index size")),
                 }
-            )
+            };
         }
         let read_vertex_index = fn_index!(h.vertex_index_size);
         let read_texture_index = fn_index!(h.texture_index_size);
@@ -113,13 +114,7 @@ impl Load for PmxFile {
         let comment = Name::decode::<LE>(rdr, &helper)?;
         println!("{:?}", comment);
         let model = Model::decode::<LE>(rdr, &helper)?;
-        Ok(PmxFile {
-            magic,
-            header,
-            model_name,
-            comment,
-            model,
-        })
+        Ok(PmxFile { magic, header, model_name, comment, model })
     }
 }
 
@@ -201,28 +196,11 @@ pub struct Vertex {
 
 #[derive(Debug)]
 enum BoneWeight {
-    BDEF1 {
-        index: i32,
-    },
-    BDEF2 {
-        indices: [i32; 2],
-        weight: f32,
-    },
-    BDEF4 {
-        indices: [i32; 4],
-        weights: [f32; 4],
-    },
-    SDEF {
-        indices: [i32; 2],
-        weight: f32,
-        c: Vec3,
-        r0: Vec3,
-        r1: Vec3,
-    },
-    QDEF {
-        indices: [i32; 4],
-        weights: [f32; 4],
-    },
+    BDEF1 { index: i32 },
+    BDEF2 { indices: [i32; 2], weight: f32 },
+    BDEF4 { indices: [i32; 4], weights: [f32; 4] },
+    SDEF { indices: [i32; 2], weight: f32, c: Vec3, r0: Vec3, r1: Vec3 },
+    QDEF { indices: [i32; 4], weights: [f32; 4] },
 }
 
 impl<'a, R: Read> Decode<R, &'a PmxHelper<R>> for BoneWeight {
@@ -234,10 +212,7 @@ impl<'a, R: Read> Decode<R, &'a PmxHelper<R>> for BoneWeight {
         let ty = u8::decode::<LE>(r, Nil)?;
         let bone_weight = match ty {
             0 => BDEF1 { index: fi(r)? },
-            1 => BDEF2 {
-                indices: [fi(r)?, fi(r)?],
-                weight: fw(r)?,
-            },
+            1 => BDEF2 { indices: [fi(r)?, fi(r)?], weight: fw(r)? },
             2 => BDEF4 {
                 indices: [fi(r)?, fi(r)?, fi(r)?, fi(r)?],
                 weights: [fw(r)?, fw(r)?, fw(r)?, fw(r)?],
@@ -409,35 +384,15 @@ impl<'a, 'b, R: Read> Decode<R, (&'a PmxHelper<R>, &'b ModeSet<BoneFlags>)> for 
             (Some(Vec3::decode::<LE>(r, Nil)?), None)
         };
         let append = if flags.contains(AppendRotate) || flags.contains(AppendTranslate) {
-            Some((
-                Index::decode::<LE>(r, &helper.read_bone_index)?,
-                f32::decode::<LE>(r, Nil)?,
-            ))
+            Some((Index::decode::<LE>(r, &helper.read_bone_index)?, f32::decode::<LE>(r, Nil)?))
         } else {
             None
         };
-        let fixed_axes = if flags.contains(AxesFixed) {
-            Some(Vec3::decode::<LE>(r, Nil)?)
-        } else {
-            None
-        };
-        let local_rot = if flags.contains(LocalAxes) {
-            Some((Vec3::decode::<LE>(r, Nil)?, Vec3::decode::<LE>(r, Nil)?))
-        } else {
-            None
-        };
-        let key_value = if flags.contains(DeformOuterParent) {
-            Some(i32::decode::<LE>(r, Nil)?)
-        } else {
-            None
-        };
+        let fixed_axes = if flags.contains(AxesFixed) { Some(Vec3::decode::<LE>(r, Nil)?) } else { None };
+        let local_rot = if flags.contains(LocalAxes) { Some((Vec3::decode::<LE>(r, Nil)?, Vec3::decode::<LE>(r, Nil)?)) } else { None };
+        let key_value = if flags.contains(DeformOuterParent) { Some(i32::decode::<LE>(r, Nil)?) } else { None };
         let ik = if flags.contains(IK) {
-            Some((
-                Index::decode::<LE>(r, &helper.read_bone_index)?,
-                i32::decode::<LE>(r, Nil)?,
-                f32::decode::<LE>(r, Nil)?,
-                Array::<IKLink>::decode::<LE>(r, helper)?,
-            ))
+            Some((Index::decode::<LE>(r, &helper.read_bone_index)?, i32::decode::<LE>(r, Nil)?, f32::decode::<LE>(r, Nil)?, Array::<IKLink>::decode::<LE>(r, helper)?))
         } else {
             None
         };
@@ -453,3 +408,21 @@ impl<'a, 'b, R: Read> Decode<R, (&'a PmxHelper<R>, &'b ModeSet<BoneFlags>)> for 
         })
     }
 }
+
+#[derive(Primitive, Debug, Clone, Copy)]
+#[repr(u8)]
+enum MorphType {
+    Group = 0,
+    Position = 1,
+    Bone = 2,
+    UV = 3,
+    AddUV1 = 4,
+    AddUV2 = 5,
+    AddUV3 = 6,
+    AddUV4 = 7,
+    Material = 8,
+    Flip = 9,
+    Impulse = 10,
+}
+
+impl_decode_mode!(MorphType, u8);
